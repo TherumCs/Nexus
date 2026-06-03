@@ -1,5 +1,14 @@
 # Nexus by Therum — Changelog
 
+## [1.2.2] — 2026-06-03
+
+### Fixed
+- **Connector save left the card stuck in edit mode.** After a successful Save on a connector card, the JS only updated the status pill — it didn't close the form, reset the Connect/Edit toggle (still labelled "Cancel"), re-mask the password inputs (the typed secret stayed in DOM plaintext until reload), or reveal the Disconnect button (the server only renders it when the connector was already configured at page-render time). The save handler in `assets/admin.js` now does all five:
+  - Hides the form
+  - Re-masks every `input[type="password"]` to `••••••••`
+  - Flips both `[data-conn-toggle]` buttons' `data-label-open` from "Connect" → "Edit", drops the `th-button-primary` class on the foot button
+  - Injects a Disconnect button into the foot if one wasn't rendered server-side
+
 ## [1.2.1] — 2026-06-03
 
 ### Fixed

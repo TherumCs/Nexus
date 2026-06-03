@@ -61,6 +61,43 @@
 							dot.textContent = 'Connected';
 							dot.className = 'th-conn-status th-conn-status-connected';
 						}
+
+						// Re-mask password fields. The user just typed plaintext
+						// values; the server has them now, so swap the inputs
+						// back to the bullet placeholder so re-opening the form
+						// doesn't leak secrets back into the DOM.
+						form.querySelectorAll('input[type="password"]').forEach(function(i){
+							if (i.value !== '') i.value = '••••••••';
+						});
+
+						// Close the form and flip both toggle buttons (the foot
+						// one + the in-form Cancel) from "Connect" → "Edit". The
+						// server-rendered data-label-open was "Connect" on first
+						// save; bump it so subsequent toggles read "Edit".
+						form.hidden = true;
+						card.querySelectorAll('[data-conn-toggle]').forEach(function(t){
+							t.setAttribute('data-label-open', 'Edit');
+						});
+						var foot = card.querySelector('.th-conn-foot-actions [data-conn-toggle]');
+						if (foot) {
+							foot.textContent = 'Edit';
+							foot.classList.remove('th-button-primary');
+						}
+
+						// Inject the Disconnect button if it wasn't rendered
+						// server-side (first-time save). Subsequent saves are
+						// no-ops — querySelector finds the existing one.
+						if (foot && ! card.querySelector('[data-conn-disconnect]')) {
+							var disc = document.createElement('button');
+							disc.type = 'button';
+							disc.className = 'th-button';
+							disc.setAttribute('data-conn-disconnect', '');
+							disc.style.color = 'var(--err)';
+							disc.style.borderColor = 'color-mix(in srgb,var(--err) 30%,transparent)';
+							disc.textContent = 'Disconnect';
+							foot.parentNode.insertBefore(disc, foot);
+						}
+
 						setTimeout(function() { if (result) result.textContent = ''; }, 2000);
 					} else {
 						if (result) { result.textContent = '✗ ' + ((j && j.data) || 'Error'); result.style.color = 'var(--err,#ef4444)'; }
