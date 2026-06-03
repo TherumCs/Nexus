@@ -1,5 +1,10 @@
 # Nexus by Therum — Changelog
 
+## [1.2.1] — 2026-06-03
+
+### Fixed
+- **Fatal on every cold page load in 1.2.0.** `includes/updater.php` declared `class Nexus_Silent_Upgrader_Skin extends WP_Upgrader_Skin` at file scope, but `WP_Upgrader_Skin` lives in `wp-admin/includes/class-wp-upgrader.php` — an admin-only file that isn't autoloaded on regular requests. Parsing the `extends` clause crashed every front-end hit. Moved the skin into its own file (`includes/class-silent-upgrader-skin.php`) and `require_once`'d it lazily from inside `nexus_install_from_package()` AFTER `nexus_load_upgrader_classes()` runs. Upgrade from 1.2.0 strongly recommended.
+
 ## [1.2.0] — 2026-06-03
 
 ### Added

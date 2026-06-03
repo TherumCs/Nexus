@@ -99,8 +99,10 @@ function nexus_release_is_newer( array $release ): bool {
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * Silent upgrader skin — captures messages instead of echoing them so AJAX
- * responses stay clean JSON.
+ * Lazy-load WP's upgrader classes. Wrapped because they only exist in
+ * admin context — `wp-admin/includes/class-wp-upgrader.php` and friends
+ * are NOT autoloaded on regular requests. Anything that extends or
+ * `new`s these classes must call this function first.
  */
 function nexus_load_upgrader_classes(): void {
 	require_once ABSPATH . 'wp-admin/includes/file.php';
@@ -110,26 +112,6 @@ function nexus_load_upgrader_classes(): void {
 	require_once ABSPATH . 'wp-admin/includes/class-plugin-upgrader.php';
 }
 
-if ( ! class_exists( 'Nexus_Silent_Upgrader_Skin' ) ) :
-class Nexus_Silent_Upgrader_Skin extends WP_Upgrader_Skin {
-	public array $messages = [];
-	public function header() {}
-	public function footer() {}
-	public function feedback( $string, ...$args ) {
-		if ( is_string( $string ) && $string !== '' ) {
-			$this->messages[] = vsprintf( $string, $args );
-		}
-	}
-	public function error( $errors ) {
-		if ( is_wp_error( $errors ) ) {
-			foreach ( $errors->get_error_messages() as $m ) $this->messages[] = $m;
-		} elseif ( is_string( $errors ) && $errors !== '' ) {
-			$this->messages[] = $errors;
-		}
-	}
-}
-endif;
-
 /**
  * Run Plugin_Upgrader::install on a local or remote zip path with
  * overwrite_package=true, so the existing Nexus install is replaced.
@@ -138,6 +120,12 @@ endif;
  */
 function nexus_install_from_package( string $package ) {
 	nexus_load_upgrader_classes();
+	// Skin subclass lives in its own file because `extends WP_Upgrader_Skin`
+	// would fatal if parsed before the parent class file is loaded — and
+	// that parent file is admin-only, never autoloaded on front-end hits.
+	// 1.2.0 had this class declared at file scope, which broke every cold
+	// page load. Require it ONLY after nexus_load_upgrader_classes() ran.
+	require_once NEXUS_DIR . 'includes/class-silent-upgrader-skin.php';
 
 	$skin     = new Nexus_Silent_Upgrader_Skin();
 	$upgrader = new Plugin_Upgrader( $skin );
