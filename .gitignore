@@ -1,0 +1,14 @@
+# macOS / editor cruft
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Claude Code local settings (per-project state, not source)
+.claude/
+
+# Local environment
+.env
+.env.local
