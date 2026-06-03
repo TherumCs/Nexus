@@ -1,5 +1,26 @@
 # Nexus by Therum — Changelog
 
+## [1.2.0] — 2026-06-03
+
+### Added
+- **Self-update.** New **Updates** tab under Manage. Pulls the latest release from the configured GitHub repo (`TherumCs/Nexus` by default, filterable via `nexus_update_repo`) or accepts a hand-uploaded plugin zip. Both paths route through WP's `Plugin_Upgrader` with `overwrite_package=true` so saved connectors + credentials survive the swap. Capability-gated on `update_plugins`.
+- **1–4 credential fields on custom connectors.** The Add-custom modal now exposes up to four labeled credential rows (label + Secret/Plain type) instead of a hardcoded single API-key field. Row 1 is required; rows 2–4 are skipped when the label is blank. Keys are derived from slugged labels with numeric-suffix dedup so two "Token" rows can coexist. Mirrors real provider auth shapes (OAuth Consumer Key + Secret, SID + Token + Auth Secret + Workspace ID, etc.).
+
+### Changed
+- **Built-in connector field defs audited against current vendor docs** and corrected:
+  - **Etsy** — full OAuth 2.0 / PKCE tuple: keystring + shared_secret + oauth_access_token + oauth_refresh_token. The previous keystring-only schema would have silently failed every authenticated v3 call.
+  - **Printful** — Consumer Key + Consumer Secret (the legacy single API key is deprecated).
+  - **Mailchimp** — dropped the redundant `server` field. The datacenter prefix is the suffix of the API key after the dash — parsed, not asked twice.
+  - **Stripe** — `publishable_key` demoted from required to optional (only needed for client-side Stripe.js / Elements). Added `stripe_account` for Connect platforms.
+  - **Amazon SP-API** — `marketplace_id` promoted to required. Added `region` select (na/eu/fe). Noted the 2023 AWS SigV4 / IAM removal.
+  - **Shopify** — updated placeholder to a current API version (2026-04). Doc link points to the Dev Dashboard custom-app flow (legacy in-Admin path deprecated Jan 2026).
+  - **Drupal** — split the ambiguous "Password / Token" field into `password` (Basic Auth) + `bearer_token` (Simple OAuth) so users know which auth mode they're in.
+  - **Ghost** — added `api_version`; clarified the Content vs Admin key roles in placeholders.
+  - **Webflow / Contentful / Square / Printify** — updated placeholders, doc links, and added missing optional fields (Contentful's `preview_token`, Square's `api_version`, etc.).
+
+### Notes
+- The `multi` auth shape (1–4 fields) is symmetric with the addition shipped to Therum OS 1.9.16's `Therum_Connections_Page` mu-plugin — same modal idea, same storage shape under `auth_label{2..4}` / `key{3,4}`.
+
 ## [1.1.0] — 2026-06-02
 
 ### Added
