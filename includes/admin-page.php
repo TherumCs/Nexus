@@ -83,14 +83,49 @@ final class Nexus_Connections_Page {
 		$tabs = self::tabs();
 		$cur  = self::current_tab_id();
 
-		// Status summary across all non-built-in connectors
-		$connected = 0;
-		$total     = 0;
+		// Status summary + per-tab counts (used by the sidebar nav). We compute
+		// configured/total per category so the "1 / 4" pills reflect reality
+		// instead of stale hardcoded strings the registration step used to set.
+		$connected   = 0;
+		$total       = 0;
+		$by_category = [];
 		foreach ( nexus_connector_registry() as $c ) {
 			if ( ! empty( $c['built_in'] ) ) continue;
+
+			// Bridge-only connectors count in the totals only when one of
+			// their bridge platforms is live on this site — otherwise they
+			// shouldn't drag the X/Y ratio down (no API to configure).
+			if ( ! empty( $c['bridge_only'] ) ) {
+				if ( ! nexus_bridge_active_for( $c ) ) continue;
+				$total++;
+				$connected++;
+				$cat = $c['category'] ?? '';
+				if ( $cat ) {
+					$by_category[ $cat ]['total'] = ( $by_category[ $cat ]['total'] ?? 0 ) + 1;
+					$by_category[ $cat ]['done']  = ( $by_category[ $cat ]['done']  ?? 0 ) + 1;
+				}
+				continue;
+			}
+
 			$total++;
-			if ( nexus_connector_is_configured( $c['id'] ) ) $connected++;
+			$cat = $c['category'] ?? '';
+			if ( $cat ) {
+				$by_category[ $cat ]['total'] = ( $by_category[ $cat ]['total'] ?? 0 ) + 1;
+				$by_category[ $cat ]['done']  = $by_category[ $cat ]['done']  ?? 0;
+			}
+			if ( nexus_connector_is_configured( $c['id'] ) ) {
+				$connected++;
+				if ( $cat ) $by_category[ $cat ]['done']++;
+			}
 		}
+		// Overwrite the static `count` on each tab whose id matches a category.
+		foreach ( $tabs as $tab_id => &$tab_row ) {
+			if ( isset( $by_category[ $tab_id ] ) ) {
+				$bc = $by_category[ $tab_id ];
+				$tab_row['count'] = $bc['done'] . ' / ' . $bc['total'];
+			}
+		}
+		unset( $tab_row );
 		?>
 		<div class="wrap"><div class="th-cx" data-nexus>
 			<div class="th-cx-head">
@@ -238,6 +273,8 @@ final class Nexus_Connections_Page {
 	private static function render_nav( array $tabs, string $cur ): void {
 		$sections = [
 			'connectors' => __( 'Connections', 'nexus' ),
+			'channels'   => __( 'Channels', 'nexus' ),
+			'checkout'   => __( 'Checkout', 'nexus' ),
 			'manage'     => __( 'Manage', 'nexus' ),
 		];
 		$grouped = [];
@@ -400,6 +437,31 @@ add_action( 'init', function() {
 		'desc'     => __( 'Pull the latest release from GitHub or install a plugin zip.', 'nexus' ),
 		'render'   => 'nexus_render_updates_tab',
 	] );
+
+	// Channels — product-feed generation for marketplaces / social commerce
+	// (Google Shopping, Meta Catalog, Pinterest, TikTok Shop, Bing).
+	// Replaces the need for a separate plugin like CTX Feed.
+	Nexus_Connections_Page::register( 'feeds', [
+		'label'    => __( 'Product feeds', 'nexus' ),
+		'section'  => 'channels',
+		'priority' => 10,
+		'dot'      => '#1877f2',
+		'desc'     => __( 'Generate the product feeds that Google Merchant Center, Meta Catalog, Pinterest, TikTok Shop, and Bing subscribe to. Built-in mapping with sensible fallbacks so products without GTIN/MPN/brand still validate.', 'nexus' ),
+		'render'   => 'nexus_render_channels_tab',
+	] );
+
+	// Checkout — bundled multi-method checkout (Card / Wallets / BNPL /
+	// Bank / Crypto / P2P). Methods light up as their backing Nexus
+	// connectors are configured. Replaces what WooPayments does, with
+	// way more rails.
+	Nexus_Connections_Page::register( 'checkout-experience', [
+		'label'    => __( 'Checkout experience', 'nexus' ),
+		'section'  => 'checkout',
+		'priority' => 10,
+		'dot'      => '#e83b3b',
+		'desc'     => __( 'Multi-rail checkout. Card, wallets, BNPL, bank transfer, crypto, P2P — all in one form. Available as the [nexus_checkout] shortcode.', 'nexus' ),
+		'render'   => 'nexus_render_checkout_tab',
+	] );
 }, 20 );
 
 
@@ -501,6 +563,79 @@ function nexus_render_conn_cards( array $connectors ): void {
 			<?php endif; ?>
 		</div>
 
+		<?php elseif ( ! empty( $connector['bridge_only'] ) ): ?>
+
+		<?php
+			$active_bridge = nexus_bridge_active_for( $connector );
+			$active_name   = $active_bridge['name'] ?? '';
+			$woo_keys      = $active_bridge['evidence']['keys'] ?? [];
+		?>
+		<div class="th-conn-foot">
+			<span class="th-conn-foot-meta">
+				<?php if ( $active_bridge ): ?>
+					<?php
+						printf(
+							/* translators: %s = bridge platform name (e.g. WooCommerce) */
+							esc_html__( 'Connected via %s', 'nexus' ),
+							esc_html( $active_name )
+						);
+					?>
+				<?php endif; ?>
+				<?php if ( ! empty( $connector['docs'] ) ): ?>
+					<a href="<?php echo esc_url( $connector['docs'] ); ?>" target="_blank" rel="noopener" class="th-conn-docs"<?php if ( $active_bridge ): ?> style="margin-left:8px"<?php endif; ?>>
+						<?php esc_html_e( 'Docs ↗', 'nexus' ); ?>
+					</a>
+				<?php endif; ?>
+			</span>
+			<div class="th-conn-foot-actions">
+				<button type="button" class="th-button <?php echo $active_bridge ? '' : 'th-button-primary'; ?>" data-conn-bridge-toggle>
+					<?php echo $active_bridge ? esc_html__( 'Manage', 'nexus' ) : esc_html__( 'Connect', 'nexus' ); ?>
+				</button>
+			</div>
+		</div>
+
+		<?php // Picker — collapsed until Connect/Manage is clicked. The links go
+		      // OUT to the connector's own site, where the user is presumably
+		      // logged in and can authorize that platform on their side. The
+		      // actual auth happens off-site; this is just a launcher. ?>
+		<div class="th-conn-bridge" data-conn-bridge-picker hidden>
+			<p class="th-conn-bridge-note">
+				<?php
+					printf(
+						/* translators: %s = connector name (e.g. PODpluser) */
+						esc_html__( 'Pick the platform you use %s on. Opens that integration\'s setup screen on the connector\'s site — you\'ll need to be signed in there.', 'nexus' ),
+						'<strong>' . esc_html( $connector['name'] ) . '</strong>'
+					);
+				?>
+			</p>
+			<?php if ( ! empty( $connector['bridge_via'] ) ): ?>
+			<div class="th-conn-bridge-links">
+				<?php foreach ( $connector['bridge_via'] as $bridge ):
+					$is_active = $active_name && $bridge['name'] === $active_name;
+				?>
+					<a href="<?php echo esc_url( $bridge['url'] ); ?>" target="_blank" rel="noopener" class="th-button<?php echo $is_active ? ' is-bridge-active' : ''; ?>">
+						<?php if ( $is_active ): ?>✓ <?php endif; ?><?php echo esc_html( $bridge['name'] ); ?> ↗
+					</a>
+				<?php endforeach; ?>
+			</div>
+			<?php endif; ?>
+			<?php if ( ! empty( $woo_keys ) ): ?>
+				<div class="th-conn-bridge-keys">
+					<?php foreach ( $woo_keys as $k ):
+						$last = ! empty( $k['last_access'] ) ? human_time_diff( strtotime( $k['last_access'] ) ) . ' ago' : 'never';
+					?>
+						<div class="th-conn-bridge-key">
+							<code><?php echo esc_html( $k['truncated_key'] ); ?></code>
+							<span><?php echo esc_html( $k['description'] ); ?> · <?php echo esc_html( $k['permissions'] ); ?> · used <?php echo esc_html( $last ); ?></span>
+						</div>
+					<?php endforeach; ?>
+					<a href="<?php echo esc_url( admin_url( 'admin.php?page=wc-settings&tab=advanced&section=keys' ) ); ?>" class="th-conn-docs">
+						<?php esc_html_e( 'Manage REST API keys in WooCommerce →', 'nexus' ); ?>
+					</a>
+				</div>
+			<?php endif; ?>
+		</div>
+
 		<?php else: ?>
 
 		<div class="th-conn-foot">
@@ -520,14 +655,18 @@ function nexus_render_conn_cards( array $connectors ): void {
 					<button type="button" class="th-button" style="color:var(--err);border-color:color-mix(in srgb,var(--err) 30%,transparent)" data-nexus-delete-custom="<?php echo esc_attr( $id ); ?>">
 						<?php esc_html_e( 'Remove', 'nexus' ); ?>
 					</button>
-				<?php elseif ( $is_configured ): ?>
+				<?php endif; ?>
+
+				<?php // ONE credential button. Configured → Disconnect (destructive). Not configured → Connect (primary, opens form). JS swaps after save/disconnect. ?>
+				<?php if ( $is_configured ): ?>
 					<button type="button" class="th-button" style="color:var(--err);border-color:color-mix(in srgb,var(--err) 30%,transparent)" data-conn-disconnect>
 						<?php esc_html_e( 'Disconnect', 'nexus' ); ?>
 					</button>
+				<?php else: ?>
+					<button type="button" class="th-button th-button-primary" data-conn-toggle data-label-open="<?php esc_attr_e( 'Connect', 'nexus' ); ?>">
+						<?php esc_html_e( 'Connect', 'nexus' ); ?>
+					</button>
 				<?php endif; ?>
-				<button type="button" class="th-button <?php echo $is_configured ? '' : 'th-button-primary'; ?>" data-conn-toggle data-label-open="<?php echo $is_configured ? esc_attr__( 'Edit', 'nexus' ) : esc_attr__( 'Connect', 'nexus' ); ?>">
-					<?php echo $is_configured ? esc_html__( 'Edit', 'nexus' ) : esc_html__( 'Connect', 'nexus' ); ?>
-				</button>
 			</div>
 		</div>
 

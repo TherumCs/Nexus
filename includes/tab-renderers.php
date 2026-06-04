@@ -13,37 +13,24 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 //  DEMO CARD GRIDS — AI / Payments / External Apps
 // ═════════════════════════════════════════════════════════════════════════════
 
+// AI / Payments / Apps — registry-driven, same card grid + Connect/Disconnect
+// flow as CMS / Ecommerce / APIs. The hardcoded demo grids these replaced
+// are preserved in git history; nexus_render_demo_cards() stays available
+// for any future demo-only surface but isn't called from any built-in tab.
+
 function nexus_render_ai_tab( string $tab_id, array $tab ): void {
-	nexus_page_head( __( 'AI Tools', 'nexus' ), $tab['desc'], __( '＋ Add AI provider', 'nexus' ) );
-	nexus_render_demo_cards( 'ai', [
-		[ 'id' => 'anthropic',  'name' => 'Anthropic · Claude',   'icon' => 'A', 'bg' => '#cc785c', 'desc' => 'claude-sonnet-4.5 · 200k context · function calling',          'state' => 'connected',     'meta' => 'linked 2d ago',  'auth' => 'API key' ],
-		[ 'id' => 'openai',     'name' => 'OpenAI · ChatGPT',     'icon' => 'O', 'bg' => '#10a37f', 'desc' => 'gpt-5-turbo · 128k context · vision · code interpreter',      'state' => 'connected',     'meta' => 'linked 6d ago',  'auth' => 'API key' ],
-		[ 'id' => 'google-ai',  'name' => 'Google AI · Gemini',   'icon' => 'G', 'bg' => '#4285f4', 'desc' => 'gemini-2.5-pro · 2M context · multimodal native',            'state' => 'not_connected', 'meta' => '',               'auth' => 'OAuth' ],
-		[ 'id' => 'ollama',     'name' => 'Local · Ollama',       'icon' => 'L', 'bg' => 'linear-gradient(135deg,#8b5cf6,#3b82f6)', 'desc' => 'llama · mistral · qwen — runs on the same host as WordPress', 'state' => 'not_connected', 'meta' => '', 'auth' => 'localhost' ],
-		[ 'id' => 'odysseus',   'name' => 'Therum · Odysseus',    'icon' => 'Ω', 'bg' => 'linear-gradient(135deg,#0f172a,#1e40af)', 'desc' => 'Bundled AI workspace · chat router · agents · memory — runs on this host', 'state' => 'not_connected', 'meta' => '', 'auth' => 'bundled' ],
-	] );
+	nexus_page_head( __( 'AI Tools', 'nexus' ), $tab['desc'], __( '＋ Add AI provider', 'nexus' ), 'ai' );
+	nexus_render_conn_cards( nexus_connectors_by_category( 'ai' ) );
 }
 
 function nexus_render_payments_tab( string $tab_id, array $tab ): void {
-	nexus_page_head( __( 'Payment Gateways', 'nexus' ), $tab['desc'], __( '＋ Add gateway', 'nexus' ) );
-	nexus_render_demo_cards( 'payments', [
-		[ 'id' => 'stripe', 'name' => 'Stripe', 'icon' => 'S', 'bg' => '#635bff', 'desc' => 'Stripe Connect · balance · payouts · 5 active customers',     'state' => 'connected',     'meta' => 'linked 60d ago', 'auth' => 'OAuth' ],
-		[ 'id' => 'plaid',  'name' => 'Plaid',  'icon' => 'P', 'bg' => '#000',    'desc' => 'Bank account linking · ACH · balance lookups. Token expired.', 'state' => 'reauth',        'meta' => 'token expired',  'auth' => 'OAuth' ],
-		[ 'id' => 'square', 'name' => 'Square', 'icon' => 'S', 'bg' => '#000', 'border' => true, 'desc' => 'Seller dashboard · in-person + online payments',     'state' => 'not_connected', 'meta' => '',               'auth' => 'OAuth' ],
-		[ 'id' => 'paypal', 'name' => 'PayPal', 'icon' => 'P', 'bg' => '#0070ba', 'desc' => 'Standard checkout · subscriptions · payouts',                   'state' => 'not_connected', 'meta' => '',               'auth' => 'OAuth' ],
-	] );
+	nexus_page_head( __( 'Payment Gateways', 'nexus' ), $tab['desc'], __( '＋ Add gateway', 'nexus' ), 'payments' );
+	nexus_render_conn_cards( nexus_connectors_by_category( 'payments' ) );
 }
 
 function nexus_render_apps_tab( string $tab_id, array $tab ): void {
-	nexus_page_head( __( 'External Apps', 'nexus' ), $tab['desc'], __( '＋ Add custom app', 'nexus' ) );
-	nexus_render_demo_cards( 'apps', [
-		[ 'id' => 'notion',   'name' => 'Notion',   'icon' => 'N', 'bg' => '#ffffff', 'color' => '#000', 'desc' => 'Workspaces · databases · pages — rendered natively in the admin', 'state' => 'not_connected', 'meta' => '', 'auth' => 'OAuth' ],
-		[ 'id' => 'airtable', 'name' => 'Airtable', 'icon' => 'A', 'bg' => '#fcb400', 'color' => '#000', 'desc' => 'Bases · tables · views — embed any base as a block',              'state' => 'not_connected', 'meta' => '', 'auth' => 'OAuth' ],
-		[ 'id' => 'slack',    'name' => 'Slack',    'icon' => 'S', 'bg' => '#4a154b', 'desc' => 'Notifications · channel posting · slash commands',                   'state' => 'not_connected', 'meta' => '', 'auth' => 'OAuth' ],
-		[ 'id' => 'linear',   'name' => 'Linear',   'icon' => 'L', 'bg' => '#5e6ad2', 'desc' => 'Issues · projects · cycles — embed assigned issues on dashboard',    'state' => 'not_connected', 'meta' => '', 'auth' => 'OAuth' ],
-		[ 'id' => 'zapier',   'name' => 'Zapier',   'icon' => 'Z', 'bg' => '#ff4a00', 'desc' => 'Trigger Zaps on site events · 6,000+ apps downstream',               'state' => 'not_connected', 'meta' => '', 'auth' => 'Webhook' ],
-		[ 'id' => 'request',  'name' => 'Request a connector', 'icon' => '＋', 'bg' => 'transparent', 'border' => true, 'desc' => "Need an app we don't have yet? Drop the URL — we'll wire it up.", 'state' => 'not_connected', 'meta' => '', 'auth' => 'Form' ],
-	] );
+	nexus_page_head( __( 'External Apps', 'nexus' ), $tab['desc'], __( '＋ Add custom app', 'nexus' ), 'apps' );
+	nexus_render_conn_cards( nexus_connectors_by_category( 'apps' ) );
 }
 
 function nexus_render_demo_cards( string $bucket, array $cards ): void {

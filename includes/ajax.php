@@ -52,13 +52,29 @@ add_action( 'wp_ajax_nexus_connector_save', function() {
 		}
 	}
 
+	// Validate live BEFORE persisting. Saving creds we know are bad means
+	// the green "Connected" pill lies — and the user doesn't find out until
+	// something downstream tries to use them. For password fields the user
+	// posted back the masked bullets, we already restored the prior value
+	// into $clean above, so validation runs against the real secret.
+	$verdict = nexus_validate_connector( $id, $clean );
+	if ( empty( $verdict['ok'] ) ) {
+		wp_send_json_error( [
+			'message' => $verdict['message'] ?? 'Validation failed.',
+		] );
+	}
+
 	nexus_save_connector( $id, [
 		'enabled' => true,
 		'config'  => $clean,
 		'updated' => time(),
 	] );
 
-	wp_send_json_success( [ 'msg' => 'Saved', 'id' => $id ] );
+	wp_send_json_success( [
+		'msg'         => $verdict['message'] ?? 'Connected.',
+		'id'          => $id,
+		'unvalidated' => ! empty( $verdict['unvalidated'] ),
+	] );
 } );
 
 add_action( 'wp_ajax_nexus_connector_delete', function() {

@@ -6,8 +6,186 @@
 	var AJAX  = cfg.ajaxurl || (window.ajaxurl || '/wp-admin/admin-ajax.php');
 	var NONCE = cfg.nonce || '';
 
+	// ─── Card foot helpers ────────────────────────────────────────────────
+	//
+	// Each card has exactly ONE credential button at any time:
+	//   - Connect    (primary)         when not configured
+	//   - Disconnect (destructive)     when configured
+	// On save success we swap Connect→Disconnect. On disconnect we swap back.
+	// Open form ↔ Cancel button is independent of that swap.
+
+	function nexusMakeConnectBtn() {
+		var b = document.createElement('button');
+		b.type = 'button';
+		b.className = 'th-button th-button-primary';
+		b.setAttribute('data-conn-toggle', '');
+		b.setAttribute('data-label-open', 'Connect');
+		b.textContent = 'Connect';
+		return b;
+	}
+	function nexusMakeDisconnectBtn() {
+		var b = document.createElement('button');
+		b.type = 'button';
+		b.className = 'th-button';
+		b.setAttribute('data-conn-disconnect', '');
+		b.style.color = 'var(--err)';
+		b.style.borderColor = 'color-mix(in srgb,var(--err) 30%,transparent)';
+		b.textContent = 'Disconnect';
+		return b;
+	}
+	function nexusSwapFootButton(card, newBtn) {
+		var foot = card.querySelector('.th-conn-foot-actions');
+		if (!foot) return;
+		var existing = foot.querySelector('[data-conn-toggle], [data-conn-disconnect]');
+		if (existing) existing.replaceWith(newBtn);
+		else foot.appendChild(newBtn);
+	}
+	function nexusSetResult(el, text, ok) {
+		if (!el) return;
+		el.textContent = text || '';
+		el.style.color = ok ? 'var(--ok,#10b981)' : 'var(--err,#ef4444)';
+		el.style.whiteSpace = 'normal';
+	}
+
+	// ─── Product feed cards (Channels section) ───────────────────────────
+	//
+	// Same shape as connector cards but separate handlers and a separate
+	// AJAX action namespace. Toggling, saving, and disabling all flip
+	// the right UI without a page reload.
+
 	document.addEventListener('click', function(e) {
-		// Toggle config form
+		var feedToggle = e.target.closest('[data-feed-toggle]');
+		if (feedToggle) {
+			var fc = feedToggle.closest('[data-feed-channel]');
+			var ff = fc && fc.querySelector('[data-feed-form]');
+			if (!ff) return;
+			var fOpen = !ff.hidden;
+			ff.hidden = fOpen;
+			feedToggle.textContent = fOpen
+				? (feedToggle.getAttribute('data-label-open') || 'Configure')
+				: 'Cancel';
+			if (!fOpen) {
+				var firstInput = ff.querySelector('input,select');
+				if (firstInput) firstInput.focus();
+			}
+			return;
+		}
+
+		var feedSave = e.target.closest('[data-feed-save]');
+		if (feedSave) {
+			var fc = feedSave.closest('[data-feed-channel]');
+			var ch = fc && fc.getAttribute('data-feed-channel');
+			if (!ch) return;
+			var ff = fc.querySelector('[data-feed-form]');
+			var fr = fc.querySelector('[data-feed-result]');
+			var inputs = ff ? ff.querySelectorAll('[data-feed-field]') : [];
+
+			var fd = new FormData();
+			fd.append('action', 'nexus_feed_save');
+			fd.append('nonce', NONCE);
+			fd.append('channel', ch);
+			inputs.forEach(function(el) {
+				if (el.type === 'checkbox') {
+					fd.append('config[' + el.getAttribute('data-feed-field') + ']', el.checked ? '1' : '');
+				} else {
+					fd.append('config[' + el.getAttribute('data-feed-field') + ']', el.value);
+				}
+			});
+
+			feedSave.disabled = true;
+			feedSave.textContent = 'Saving…';
+			if (fr) { fr.textContent = ''; fr.style.color = ''; }
+
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r) { return r.json(); })
+				.then(function(j) {
+					feedSave.disabled = false;
+					feedSave.textContent = 'Save & generate URL';
+					if (j && j.success) {
+						if (fr) { fr.textContent = '✓ ' + (j.data.message || 'Saved'); fr.style.color = 'var(--ok,#10b981)'; }
+						// Reload to surface the freshly-generated feed URL + flip pill.
+						setTimeout(function() { location.reload(); }, 700);
+					} else {
+						if (fr) { fr.textContent = '✗ ' + ((j && j.data && (j.data.message || j.data)) || 'Save failed.'); fr.style.color = 'var(--err,#ef4444)'; }
+					}
+				})
+				.catch(function() {
+					feedSave.disabled = false;
+					feedSave.textContent = 'Save & generate URL';
+					if (fr) { fr.textContent = '✗ Network error'; fr.style.color = 'var(--err,#ef4444)'; }
+				});
+			return;
+		}
+
+		var feedCopy = e.target.closest('[data-feed-copy]');
+		if (feedCopy) {
+			var url = feedCopy.getAttribute('data-copy-target') || '';
+			if (!url) return;
+			var done = function(ok) {
+				var orig = feedCopy.dataset.origLabel || feedCopy.textContent;
+				if (!feedCopy.dataset.origLabel) feedCopy.dataset.origLabel = feedCopy.textContent;
+				feedCopy.textContent = ok ? '✓ Copied' : '✗ Copy failed';
+				setTimeout(function() { feedCopy.textContent = feedCopy.dataset.origLabel; }, 1500);
+			};
+			if (navigator.clipboard && navigator.clipboard.writeText) {
+				navigator.clipboard.writeText(url).then(function(){ done(true); }, function(){ done(false); });
+			} else {
+				// Fallback: select an offscreen input + execCommand. Old browsers.
+				var ta = document.createElement('textarea');
+				ta.value = url; ta.style.position = 'absolute'; ta.style.left = '-9999px';
+				document.body.appendChild(ta); ta.select();
+				try { done(document.execCommand('copy')); } catch (_) { done(false); }
+				document.body.removeChild(ta);
+			}
+			return;
+		}
+
+		var feedDisable = e.target.closest('[data-feed-disable]');
+		if (feedDisable) {
+			var fc = feedDisable.closest('[data-feed-channel]');
+			var ch = fc && fc.getAttribute('data-feed-channel');
+			if (!ch || !confirm('Disable the ' + ch + ' feed? Its URL will stop returning data.')) return;
+			feedDisable.disabled = true;
+			feedDisable.textContent = 'Disabling…';
+
+			var fd = new FormData();
+			fd.append('action', 'nexus_feed_delete');
+			fd.append('nonce', NONCE);
+			fd.append('channel', ch);
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r) { return r.json(); })
+				.then(function(j) {
+					if (j && j.success) location.reload();
+					else { feedDisable.disabled = false; feedDisable.textContent = 'Disable feed'; alert('Disable failed'); }
+				})
+				.catch(function() { feedDisable.disabled = false; feedDisable.textContent = 'Disable feed'; alert('Network error'); });
+			return;
+		}
+	});
+
+	document.addEventListener('click', function(e) {
+		// Bridge-only Connect/Manage button → toggle the platform picker.
+		// Picker lives outside the foot (sibling div), keyed by the closest
+		// card. Independent from the normal credential form toggle.
+		var bridgeBtn = e.target.closest('[data-conn-bridge-toggle]');
+		if (bridgeBtn) {
+			var bcard   = bridgeBtn.closest('[data-connector]');
+			var picker  = bcard ? bcard.querySelector('[data-conn-bridge-picker]') : null;
+			if (!picker) return;
+			var bopen = !picker.hidden;
+			picker.hidden = bopen;
+			// Defer label flip: keep it as "Connect"/"Manage" when closed,
+			// flip to "Close" when open so the action is reversible.
+			if (bopen) {
+				bridgeBtn.textContent = bridgeBtn.dataset.openLabel || bridgeBtn.textContent;
+			} else {
+				bridgeBtn.dataset.openLabel = bridgeBtn.textContent;
+				bridgeBtn.textContent = 'Close';
+			}
+			return;
+		}
+
+		// Toggle config form (Connect button + Cancel button both carry this attr)
 		var btn = e.target.closest('[data-conn-toggle]');
 		if (btn) {
 			var card = btn.closest('[data-connector]');
@@ -15,7 +193,7 @@
 			if (!form) return;
 			var open = !form.hidden;
 			form.hidden = open;
-			btn.textContent = open ? (btn.getAttribute('data-label-open') || 'Configure') : 'Cancel';
+			btn.textContent = open ? (btn.getAttribute('data-label-open') || 'Connect') : 'Cancel';
 			if (!open) {
 				var first = form.querySelector('input,select,textarea');
 				if (first) first.focus();
@@ -23,7 +201,7 @@
 			return;
 		}
 
-		// Save
+		// Save — validates server-side, only flips to Disconnect on success
 		var save = e.target.closest('[data-conn-save]');
 		if (save) {
 			var card = save.closest('[data-connector]');
@@ -46,8 +224,8 @@
 			});
 
 			save.disabled = true;
-			save.textContent = 'Saving…';
-			if (result) { result.textContent = ''; result.style.color = ''; }
+			save.textContent = 'Connecting…';
+			nexusSetResult(result, '', true);
 
 			fetch(AJAX, { method: 'POST', credentials: 'same-origin', body: fd })
 				.then(function(r) { return r.json(); })
@@ -55,68 +233,51 @@
 					save.disabled = false;
 					save.textContent = 'Save';
 					if (j && j.success) {
-						if (result) { result.textContent = '✓ Saved'; result.style.color = 'var(--ok,#10b981)'; }
+						var msg = (j.data && j.data.msg) || 'Connected.';
+						var unvalidated = !!(j.data && j.data.unvalidated);
+
+						// Status pill — green if live-validated, amber-ish if just stored
 						var dot = card.querySelector('[data-conn-status]');
 						if (dot) {
-							dot.textContent = 'Connected';
-							dot.className = 'th-conn-status th-conn-status-connected';
+							dot.textContent = unvalidated ? 'Saved' : 'Connected';
+							dot.className = 'th-conn-status ' + (unvalidated ? 'th-conn-status-off' : 'th-conn-status-connected');
 						}
 
-						// Re-mask password fields. The user just typed plaintext
-						// values; the server has them now, so swap the inputs
-						// back to the bullet placeholder so re-opening the form
-						// doesn't leak secrets back into the DOM.
+						// Re-mask password fields so re-opening doesn't leak typed secrets
 						form.querySelectorAll('input[type="password"]').forEach(function(i){
 							if (i.value !== '') i.value = '••••••••';
 						});
 
-						// Close the form and flip both toggle buttons (the foot
-						// one + the in-form Cancel) from "Connect" → "Edit". The
-						// server-rendered data-label-open was "Connect" on first
-						// save; bump it so subsequent toggles read "Edit".
+						// Close the form, swap Connect → Disconnect
 						form.hidden = true;
-						card.querySelectorAll('[data-conn-toggle]').forEach(function(t){
-							t.setAttribute('data-label-open', 'Edit');
-						});
-						var foot = card.querySelector('.th-conn-foot-actions [data-conn-toggle]');
-						if (foot) {
-							foot.textContent = 'Edit';
-							foot.classList.remove('th-button-primary');
-						}
+						nexusSwapFootButton(card, nexusMakeDisconnectBtn());
 
-						// Inject the Disconnect button if it wasn't rendered
-						// server-side (first-time save). Subsequent saves are
-						// no-ops — querySelector finds the existing one.
-						if (foot && ! card.querySelector('[data-conn-disconnect]')) {
-							var disc = document.createElement('button');
-							disc.type = 'button';
-							disc.className = 'th-button';
-							disc.setAttribute('data-conn-disconnect', '');
-							disc.style.color = 'var(--err)';
-							disc.style.borderColor = 'color-mix(in srgb,var(--err) 30%,transparent)';
-							disc.textContent = 'Disconnect';
-							foot.parentNode.insertBefore(disc, foot);
-						}
-
-						setTimeout(function() { if (result) result.textContent = ''; }, 2000);
+						nexusSetResult(result, '✓ ' + msg, true);
+						setTimeout(function() { if (result) result.textContent = ''; }, 4000);
 					} else {
-						if (result) { result.textContent = '✗ ' + ((j && j.data) || 'Error'); result.style.color = 'var(--err,#ef4444)'; }
+						// Validation failed — keep the form open, show the real reason
+						var err = (j && j.data && (j.data.message || j.data)) || 'Save failed.';
+						nexusSetResult(result, '✗ ' + err, false);
 					}
 				})
 				.catch(function() {
 					save.disabled = false;
 					save.textContent = 'Save';
-					if (result) { result.textContent = '✗ Network error'; result.style.color = 'var(--err,#ef4444)'; }
+					nexusSetResult(result, '✗ Network error — try again.', false);
 				});
 			return;
 		}
 
-		// Disconnect
+		// Disconnect — clears creds, swaps Disconnect → Connect
 		var disc = e.target.closest('[data-conn-disconnect]');
 		if (disc) {
 			var card = disc.closest('[data-connector]');
 			var id   = card ? card.getAttribute('data-connector') : '';
-			if (!id || !confirm('Disconnect ' + id + '? Saved credentials will be removed.')) return;
+			var name = (card && card.querySelector('.th-conn-name')) ? card.querySelector('.th-conn-name').firstChild.textContent.trim() : id;
+			if (!id || !confirm('Disconnect ' + name + '? Saved credentials will be removed from this site.')) return;
+
+			disc.disabled = true;
+			disc.textContent = 'Disconnecting…';
 
 			var fd = new FormData();
 			fd.append('action', 'nexus_connector_delete');
@@ -134,10 +295,17 @@
 							form.querySelectorAll('input[type="password"],input[type="text"],input[type="url"]').forEach(function(i){ i.value = ''; });
 							form.hidden = true;
 						}
-						var toggle = card.querySelector('[data-conn-toggle]');
-						if (toggle) toggle.textContent = toggle.getAttribute('data-label-open') || 'Configure';
-						disc.hidden = true;
+						nexusSwapFootButton(card, nexusMakeConnectBtn());
+					} else {
+						disc.disabled = false;
+						disc.textContent = 'Disconnect';
+						alert((j && j.data && (j.data.message || j.data)) || 'Disconnect failed.');
 					}
+				})
+				.catch(function() {
+					disc.disabled = false;
+					disc.textContent = 'Disconnect';
+					alert('Network error — try again.');
 				});
 		}
 	});

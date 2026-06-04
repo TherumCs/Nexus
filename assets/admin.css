@@ -239,3 +239,31 @@
 .nexus-cred-row .nexus-cred-label:focus,
 .nexus-cred-row .nexus-cred-type:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 18%,transparent)}
 .nexus-cred-row[data-cred-row="1"] .nexus-cred-label{border-color:color-mix(in srgb,var(--ac) 35%,var(--bd2))}
+
+/* === Bridge-only connector card (no API; surface platform links) === */
+.th-conn-bridge{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--bd)}
+.th-conn-bridge-note{margin:0;font-size:12px;color:var(--tx2);line-height:1.55}
+.th-conn-bridge-links{display:flex;flex-wrap:wrap;gap:6px}
+.th-conn-bridge-links .th-button{font-size:12px}
+.th-conn-bridge-docs{margin:2px 0 0;font-size:11px;color:var(--tx3)}
+
+/* Active bridge — the one we inferred is "live" on this site */
+.th-conn-bridge-links .th-button.is-bridge-active{
+  background:color-mix(in srgb,var(--ok) 12%,transparent);
+  border-color:color-mix(in srgb,var(--ok) 35%,transparent);
+  color:var(--ok);
+  font-weight:600;
+}
+
+/* Bridge-only: detected Woo keys + fresh capture panel + trigger button */
+.th-conn-bridge-keys{display:flex;flex-direction:column;gap:5px;padding:8px 10px;background:var(--sf2);border:1px solid var(--bd);border-radius:8px;font-size:12px}
+.th-conn-bridge-key{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.th-conn-bridge-key code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--tx);background:var(--sf);padding:2px 6px;border-radius:4px;border:1px solid var(--bd)}
+.th-conn-bridge-key span{color:var(--tx2);font-size:11px}
+.th-conn-bridge-fresh{padding:12px;border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);background:color-mix(in srgb,var(--ok) 6%,transparent);border-radius:8px;display:flex;flex-direction:column;gap:8px}
+.th-conn-bridge-fresh strong{color:var(--ok);font-size:13px}
+.th-conn-bridge-fresh p{margin:0;font-size:12px;color:var(--tx2);line-height:1.5}
+.th-conn-bridge-fresh label{display:flex;flex-direction:column;gap:3px;font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em}
+.th-conn-bridge-fresh input{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;padding:6px 9px;border:1px solid var(--bd);border-radius:6px;background:var(--sf);color:var(--tx)}
+.th-conn-bridge-trigger{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:2px}
+.th-conn-bridge-help{font-size:11px;color:var(--tx3);line-height:1.5;flex:1;min-width:200px}
