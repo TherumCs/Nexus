@@ -163,6 +163,70 @@
 		}
 	});
 
+	// ─── OAuth Sign-in button ────────────────────────────────────────────
+	//
+	// Clicking [data-nexus-oauth-start] POSTs to ajax→ nexus_oauth_start
+	// which returns the provider's authorize URL with state + PKCE wired
+	// up. We then redirect the whole window so the provider gets a real
+	// browser navigation. If the response says "needs setup" (no client
+	// id/secret saved yet), we open the form and surface the OAuth
+	// section so the user can paste their app credentials first.
+
+	document.addEventListener('click', function(e) {
+		var oauthBtn = e.target.closest('[data-nexus-oauth-start]');
+		if (oauthBtn) {
+			e.preventDefault();
+			var connectorId = oauthBtn.getAttribute('data-nexus-oauth-start');
+			var card = oauthBtn.closest('[data-connector]');
+			var needsSetup = oauthBtn.getAttribute('data-nexus-oauth-needs-setup') === '1';
+
+			// If the foot button is gated (no app creds yet), expand the form
+			// + focus the first OAuth field. Don't fire the AJAX yet.
+			if (needsSetup && card) {
+				var form = card.querySelector('[data-conn-form]');
+				if (form) {
+					form.hidden = false;
+					var firstOauthInput = form.querySelector('[data-field="oauth_client_id"]');
+					if (firstOauthInput) {
+						firstOauthInput.focus();
+						firstOauthInput.select && firstOauthInput.select();
+					}
+					var toggle = card.querySelector('.th-conn-foot-actions [data-conn-toggle]');
+					if (toggle) toggle.textContent = 'Cancel';
+				}
+				return;
+			}
+
+			oauthBtn.disabled = true;
+			var origLabel = oauthBtn.textContent;
+			oauthBtn.textContent = 'Redirecting…';
+
+			var fd = new FormData();
+			fd.append('action', 'nexus_oauth_start');
+			fd.append('nonce', NONCE);
+			fd.append('connector', connectorId);
+
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					if (j && j.success && j.data && j.data.url) {
+						window.location.href = j.data.url;
+					} else {
+						oauthBtn.disabled = false;
+						oauthBtn.textContent = origLabel;
+						var msg = (j && j.data && (j.data.message || j.data)) || 'Could not start OAuth.';
+						alert(msg);
+					}
+				})
+				.catch(function(){
+					oauthBtn.disabled = false;
+					oauthBtn.textContent = origLabel;
+					alert('Network error — try again.');
+				});
+			return;
+		}
+	});
+
 	document.addEventListener('click', function(e) {
 		// Bridge-only Connect/Manage button → toggle the platform picker.
 		// Picker lives outside the foot (sibling div), keyed by the closest

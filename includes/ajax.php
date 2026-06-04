@@ -27,7 +27,31 @@ add_action( 'wp_ajax_nexus_connector_save', function() {
 	$existing = nexus_get_connector( $id );
 	$prior    = $existing['config'] ?? [];
 
+	// Carry forward OAuth tokens already on file (the form doesn't
+	// re-post them; they're only set via the OAuth callback). Plus
+	// existing oauth_meta / expiry. The save below would otherwise
+	// silently wipe them when the user edits the manual-config fields.
 	$clean = [];
+	foreach ( [ 'oauth_access_token', 'oauth_refresh_token', 'oauth_token_type', 'oauth_expires_at', 'oauth_meta' ] as $oauth_passthrough ) {
+		if ( isset( $prior[ $oauth_passthrough ] ) ) $clean[ $oauth_passthrough ] = $prior[ $oauth_passthrough ];
+	}
+
+	// OAuth app credentials are NOT in $connector['fields'] (those are
+	// the connector-specific paste-creds). Handle separately when the
+	// connector supports OAuth. Treats bullets as "no change" just like
+	// password fields below.
+	if ( function_exists( 'nexus_connector_supports_oauth' ) && nexus_connector_supports_oauth( $id ) ) {
+		$bullets = str_repeat( '•', 8 );
+		foreach ( [ 'oauth_client_id', 'oauth_client_secret' ] as $oauth_field ) {
+			$v = $posted_config[ $oauth_field ] ?? '';
+			if ( $v === $bullets || $v === '' ) {
+				$clean[ $oauth_field ] = $prior[ $oauth_field ] ?? '';
+			} else {
+				$clean[ $oauth_field ] = sanitize_text_field( $v );
+			}
+		}
+	}
+
 	foreach ( $connector['fields'] as $field ) {
 		$key = $field['key'];
 		$val = $posted_config[ $key ] ?? '';

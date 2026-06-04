@@ -1,5 +1,28 @@
 # Nexus by Therum — Changelog
 
+## [1.6.0] — 2026-06-04
+
+### Added
+- **Sign in with X — OAuth 2.0 for 20 providers.** Every connector that supports OAuth now has a primary "Sign in with [Provider] →" button alongside the existing paste-credentials path. Tokens come back automatically via a REST callback, get stored, and refresh on their own when the provider supports it.
+- **Providers wired:** Google Drive · Google AI · GitHub · Slack · Notion · Linear · Asana · Calendly · HubSpot · Stripe (Connect) · Shopify · PayPal · Square · Dropbox · Figma · Airtable (PKCE) · Mailchimp · Etsy (PKCE) · Amazon SP-API · monday.com.
+- **Bring-Your-Own-App model.** User creates an OAuth app on the provider's developer console once, registers the Nexus redirect URI (surfaced prominently in the OAuth section, click-to-copy), pastes Client ID + Secret into Nexus. After that, "Sign in" is one click. (Hosted-OAuth-proxy model that would skip the BYOA step is separate infra; not in this release.)
+- **PKCE handled** where required (Etsy, Airtable) — verifier generated, S256 challenge sent, verifier round-tripped via transient.
+- **Token refresh** — `nexus_oauth_get_token($id)` returns a usable access_token, refreshing automatically when expired (for providers that support refresh — Google, Asana, Calendly, HubSpot, Square, Dropbox, Figma, Airtable, Etsy, Amazon, monday).
+- **State / CSRF** protection — random 32-char state token stored in a 10-min transient with the connector ID + user. Callback validates before exchange.
+- **Tenant-specific URLs** handled — Shopify (`{store_domain}.myshopify.com`), PayPal (sandbox vs live endpoints) build their authorize/token URLs from the connector's existing config.
+- **Per-provider metadata extractors** — Slack returns team info, Notion returns workspace, Stripe returns the connected `acct_…`. Stored in `oauth_meta` for downstream consumers.
+- **Callback result banner** — when the user returns from the provider's authorize screen, a one-shot banner at the top of the Nexus admin shows ✓ Connected or ✗ + reason.
+- **REST endpoint** `GET /wp-json/nexus/v1/oauth-callback/<connector>` — provider redirects here; we validate state, exchange code for tokens, redirect back to admin.
+
+### Changed
+- **Save handler** preserves OAuth tokens across manual edits — editing the paste-creds fields no longer wipes `oauth_access_token` / `oauth_refresh_token` / `oauth_expires_at` / `oauth_meta`.
+- **Card foot** — for OAuth-capable connectors, primary button is now "Sign in with X →"; "Configure" expands the form (which now includes the OAuth app fields + the credential paste fallback).
+- **Connector status** — OAuth-saved connectors show the normal green "Connected" pill since they have a real token.
+
+### Notes
+- Validators (Stripe, Printful, etc.) currently target the paste-creds fields (e.g. `secret_key`). OAuth-saved connectors get marked configured via the callback path, which bypasses validation. Phase 2: teach each validator to accept `oauth_access_token` as an alternative.
+- For Therum-hosted OAuth ("Sign in with Google" without each user creating an app), a separate proxy service would need to register one app per provider and forward callbacks. Out of scope here.
+
 ## [1.5.1] — 2026-06-04
 
 ### Removed

@@ -128,6 +128,28 @@ final class Nexus_Connections_Page {
 		unset( $tab_row );
 		?>
 		<div class="wrap"><div class="th-cx" data-nexus>
+
+			<?php // OAuth callback result banner. Shown immediately after the
+			      // user returns from a provider's authorize screen so they
+			      // know whether the connection succeeded. Auto-dismisses on
+			      // any other navigation. ?>
+			<?php if ( ! empty( $_GET['nexus_oauth_done'] ) ):
+				$oauth_done   = sanitize_key( wp_unslash( $_GET['nexus_oauth_done'] ) );
+				$oauth_status = sanitize_key( wp_unslash( $_GET['oauth_status'] ?? '' ) );
+				$oauth_msg    = isset( $_GET['oauth_msg'] ) ? sanitize_text_field( wp_unslash( $_GET['oauth_msg'] ) ) : '';
+				$conn_name    = nexus_connector_registry()[ $oauth_done ]['name'] ?? $oauth_done;
+				$ok           = $oauth_status === 'connected';
+			?>
+				<div class="nexus-oauth-banner <?php echo $ok ? 'is-ok' : 'is-err'; ?>">
+					<?php if ( $ok ): ?>
+						<strong>✓ <?php echo esc_html( $conn_name ); ?></strong> <?php esc_html_e( 'connected via OAuth.', 'nexus' ); ?>
+					<?php else: ?>
+						<strong>✗ <?php echo esc_html( $conn_name ); ?></strong> <?php esc_html_e( 'OAuth failed:', 'nexus' ); ?>
+						<span><?php echo esc_html( $oauth_status . ( $oauth_msg ? ' — ' . $oauth_msg : '' ) ); ?></span>
+					<?php endif; ?>
+				</div>
+			<?php endif; ?>
+
 			<div class="th-cx-head">
 				<div>
 					<div class="th-cx-eyebrow"><?php esc_html_e( 'Admin · Connections', 'nexus' ); ?></div>
@@ -649,10 +671,25 @@ function nexus_render_conn_cards( array $connectors ): void {
 					</button>
 				<?php endif; ?>
 
-				<?php // ONE credential button. Configured → Disconnect (destructive). Not configured → Connect (primary, opens form). JS swaps after save/disconnect. ?>
+				<?php
+					// ONE credential button. Configured → Disconnect (destructive).
+					// Not configured → either "Sign in with X" (OAuth-capable) or
+					// "Connect" (paste-credentials only). The OAuth button is
+					// gated client-side — if no client_id/secret saved, clicking
+					// it expands the form so the user can set the app up first.
+					$has_oauth = nexus_connector_supports_oauth( $id );
+				?>
 				<?php if ( $is_configured ): ?>
 					<button type="button" class="th-button" style="color:var(--err);border-color:color-mix(in srgb,var(--err) 30%,transparent)" data-conn-disconnect>
 						<?php esc_html_e( 'Disconnect', 'nexus' ); ?>
+					</button>
+					<button type="button" class="th-button" data-conn-toggle data-label-open="<?php esc_attr_e( 'Edit', 'nexus' ); ?>">
+						<?php esc_html_e( 'Edit', 'nexus' ); ?>
+					</button>
+				<?php elseif ( $has_oauth ): ?>
+					<?php nexus_render_oauth_signin_button( $connector ); ?>
+					<button type="button" class="th-button" data-conn-toggle data-label-open="<?php esc_attr_e( 'Configure', 'nexus' ); ?>">
+						<?php esc_html_e( 'Configure', 'nexus' ); ?>
 					</button>
 				<?php else: ?>
 					<button type="button" class="th-button th-button-primary" data-conn-toggle data-label-open="<?php esc_attr_e( 'Connect', 'nexus' ); ?>">
@@ -663,6 +700,7 @@ function nexus_render_conn_cards( array $connectors ): void {
 		</div>
 
 		<div class="th-conn-form" data-conn-form hidden>
+			<?php if ( $has_oauth ) nexus_render_oauth_app_fields( $connector ); ?>
 			<?php foreach ( $connector['fields'] as $field ):
 				$val = $config[ $field['key'] ] ?? '';
 			?>
