@@ -199,14 +199,45 @@
 
 			oauthBtn.disabled = true;
 			var origLabel = oauthBtn.textContent;
-			oauthBtn.textContent = 'Redirecting…';
+			oauthBtn.textContent = 'Saving creds…';
 
-			var fd = new FormData();
-			fd.append('action', 'nexus_oauth_start');
-			fd.append('nonce', NONCE);
-			fd.append('connector', connectorId);
+			// Auto-save the form first. The AJAX endpoint reads client_id/secret
+			// from the DB, not the POST body — so if the user pasted values and
+			// clicked Sign in without saving, the OAuth start would fail with
+			// "missing app credentials." We trigger a save here, wait for it,
+			// then start OAuth. If there's no form (e.g. foot button click on a
+			// fully-configured card), skip the save and go straight to OAuth.
+			var saveBeforeOauth = card
+				? new Promise(function(resolve) {
+					var form = card.querySelector('[data-conn-form]');
+					if (!form || form.hidden) return resolve();
+					var inputs = form.querySelectorAll('[data-field]');
+					if (!inputs.length) return resolve();
+					var saveFd = new FormData();
+					saveFd.append('action', 'nexus_connector_save');
+					saveFd.append('nonce', NONCE);
+					saveFd.append('connector', connectorId);
+					inputs.forEach(function(el) {
+						if (el.type === 'checkbox') {
+							saveFd.append('config[' + el.getAttribute('data-field') + ']', el.checked ? '1' : '');
+						} else {
+							saveFd.append('config[' + el.getAttribute('data-field') + ']', el.value);
+						}
+					});
+					fetch(AJAX, { method:'POST', credentials:'same-origin', body: saveFd })
+						.then(function(){ resolve(); })
+						.catch(function(){ resolve(); }); // proceed even if save errored; OAuth start will report it
+				})
+				: Promise.resolve();
 
-			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+			saveBeforeOauth.then(function() {
+				oauthBtn.textContent = 'Redirecting…';
+				var fd = new FormData();
+				fd.append('action', 'nexus_oauth_start');
+				fd.append('nonce', NONCE);
+				fd.append('connector', connectorId);
+				return fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd });
+			})
 				.then(function(r){ return r.json(); })
 				.then(function(j){
 					if (j && j.success && j.data && j.data.url) {

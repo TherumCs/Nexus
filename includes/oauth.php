@@ -279,6 +279,53 @@ function nexus_oauth_redirect_uri( string $id ): string {
 	return rest_url( 'nexus/v1/oauth-callback/' . sanitize_key( $id ) );
 }
 
+/**
+ * Hosted-proxy mode toggle. When NEXUS_OAUTH_PROXY_URL is defined in
+ * wp-config.php, the Sign-in flow bypasses BYOA (per-install OAuth
+ * apps) and routes through the Therum-hosted proxy at that URL. The
+ * proxy holds the OAuth app credentials, runs the dance, and sends
+ * HMAC-signed tokens back to this site.
+ *
+ * Required when hosted mode is on:
+ *   NEXUS_OAUTH_PROXY_URL            — e.g. 'https://oauth.therum.studio'
+ *   NEXUS_OAUTH_PROXY_SHARED_SECRET  — same value as proxy's HMAC_SECRET
+ */
+function nexus_oauth_hosted_mode(): bool {
+	return defined( 'NEXUS_OAUTH_PROXY_URL' )
+		&& defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' )
+		&& NEXUS_OAUTH_PROXY_URL !== ''
+		&& NEXUS_OAUTH_PROXY_SHARED_SECRET !== '';
+}
+
+function nexus_oauth_proxy_url(): string {
+	return rtrim( (string) ( defined( 'NEXUS_OAUTH_PROXY_URL' ) ? NEXUS_OAUTH_PROXY_URL : '' ), '/' );
+}
+
+function nexus_oauth_proxy_secret(): string {
+	return (string) ( defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' ) ? NEXUS_OAUTH_PROXY_SHARED_SECRET : '' );
+}
+
+/**
+ * Verify the HMAC signature on a payload received from the proxy.
+ * Payload format: base64url(JSON) + "." + base64url(HMAC).
+ */
+function nexus_oauth_verify_proxy_payload( string $payload ): ?array {
+	$secret = nexus_oauth_proxy_secret();
+	if ( ! $secret ) return null;
+	$dot = strrpos( $payload, '.' );
+	if ( $dot === false ) return null;
+	$b64 = substr( $payload, 0, $dot );
+	$sig = substr( $payload, $dot + 1 );
+
+	$expected = rtrim( strtr( base64_encode( hash_hmac( 'sha256', $b64, $secret, true ) ), '+/', '-_' ), '=' );
+	if ( ! hash_equals( $expected, $sig ) ) return null;
+
+	$json = base64_decode( strtr( $b64, '-_', '+/' ) );
+	if ( ! $json ) return null;
+	$decoded = json_decode( $json, true );
+	return is_array( $decoded ) ? $decoded : null;
+}
+
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  TENANT-SPECIFIC URL BUILDERS (Shopify, PayPal sandbox/live)
@@ -323,6 +370,32 @@ function nexus_oauth_authorize_url( string $connector_id ) {
 	$saved = nexus_get_connector( $connector_id );
 	$conn  = $saved['config'] ?? [];
 
+	// Hosted mode — skip BYOA entirely. Hit the Therum proxy with the
+	// site origin + return URL; proxy will use its own OAuth app secret
+	// to run the dance and POST tokens back HMAC-signed.
+	if ( nexus_oauth_hosted_mode() ) {
+		$site_origin = wp_parse_url( home_url(), PHP_URL_SCHEME ) . '://' . wp_parse_url( home_url(), PHP_URL_HOST );
+		$return_url  = admin_url( 'admin.php?page=nexus&nexus_oauth_done=' . sanitize_key( $connector_id ) );
+
+		$start_url = nexus_oauth_proxy_url() . '/v1/start/' . sanitize_key( $connector_id );
+		$params = [
+			'return' => $return_url,
+			'site'   => $site_origin,
+		];
+
+		// Pass tenant config (Shopify store_domain, PayPal sandbox flag)
+		// so the proxy can build per-tenant URLs.
+		if ( $connector_id === 'shopify' && ! empty( $conn['store_domain'] ) ) {
+			$params['tenant'] = (string) $conn['store_domain'];
+		}
+		if ( $connector_id === 'paypal' && ! empty( $conn['sandbox'] ) ) {
+			$params['tenant'] = 'sandbox';
+		}
+
+		return $start_url . '?' . http_build_query( $params );
+	}
+
+	// BYOA mode — Nexus install holds the OAuth app credentials.
 	$client_id = (string) ( $conn['oauth_client_id'] ?? '' );
 	if ( ! $client_id ) return new WP_Error( 'nexus_oauth_missing_app', 'Set your OAuth Client ID + Secret first.' );
 
@@ -394,7 +467,46 @@ add_action( 'rest_api_init', function() {
 			'connector' => [ 'validate_callback' => fn( $v ) => is_string( $v ) && $v !== '' ],
 		],
 	] );
+
+	// Hosted-mode callback. Proxy sends ?payload=base64.hmac&return=<admin_url>.
+	register_rest_route( 'nexus/v1', '/oauth-proxy-callback', [
+		'methods'             => 'GET',
+		'callback'            => 'nexus_oauth_handle_proxy_callback',
+		'permission_callback' => '__return_true', // HMAC signature is the auth
+	] );
 } );
+
+function nexus_oauth_handle_proxy_callback( WP_REST_Request $req ) {
+	$provider = sanitize_key( (string) $req->get_param( 'provider' ) );
+	$payload  = (string) $req->get_param( 'payload' );
+	$return   = (string) $req->get_param( 'return' );
+	$return_safe = $return ?: admin_url( 'admin.php?page=nexus' );
+
+	if ( ! nexus_oauth_hosted_mode() ) {
+		nexus_oauth_redirect_with_msg( $return_safe, $provider, 'hosted_off', 'Hosted OAuth mode not enabled' );
+	}
+
+	$decoded = nexus_oauth_verify_proxy_payload( $payload );
+	if ( ! $decoded ) {
+		nexus_oauth_redirect_with_msg( $return_safe, $provider, 'bad_signature', 'Proxy payload signature did not verify' );
+	}
+	if ( ( $decoded['provider'] ?? '' ) !== $provider ) {
+		nexus_oauth_redirect_with_msg( $return_safe, $provider, 'provider_mismatch', 'Payload provider does not match URL' );
+	}
+	$tokens = $decoded['tokens'] ?? [];
+	if ( ! is_array( $tokens ) || empty( $tokens['access_token'] ) ) {
+		nexus_oauth_redirect_with_msg( $return_safe, $provider, 'no_token', 'Payload missing access_token' );
+	}
+
+	// Reject very old payloads (replay protection — 5-min window).
+	$ts = (int) ( $decoded['ts'] ?? 0 );
+	if ( $ts > 0 && abs( time() * 1000 - $ts ) > 5 * 60 * 1000 ) {
+		nexus_oauth_redirect_with_msg( $return_safe, $provider, 'stale', 'Payload too old' );
+	}
+
+	nexus_oauth_persist_tokens( $provider, $tokens );
+	nexus_oauth_redirect_with_msg( $return_safe, $provider, 'connected', '' );
+}
 
 function nexus_oauth_handle_callback( WP_REST_Request $req ) {
 	$connector_id = sanitize_key( $req['connector'] );
@@ -652,10 +764,8 @@ function nexus_render_oauth_app_fields( array $connector ): void {
 	if ( ! $cfg ) return;
 	$saved    = nexus_get_connector( $connector['id'] );
 	$conf     = $saved['config'] ?? [];
-	$has_app  = ! empty( $conf['oauth_client_id'] ) && ! empty( $conf['oauth_client_secret'] );
 	$has_tok  = ! empty( $conf['oauth_access_token'] );
-	$redirect = nexus_oauth_redirect_uri( $connector['id'] );
-	$register = $cfg['docs_register_uri'] ?? '';
+	$hosted   = nexus_oauth_hosted_mode();
 	?>
 	<div class="nexus-oauth-section">
 		<div class="nexus-oauth-head">
@@ -666,45 +776,74 @@ function nexus_render_oauth_app_fields( array $connector ): void {
 					'<strong>' . esc_html( $connector['name'] ) . '</strong>'
 				);
 			?>
+			<?php if ( $hosted ): ?>
+				<span class="nexus-oauth-badge" style="background:color-mix(in srgb,var(--ac) 12%,transparent);color:var(--ac)"><?php esc_html_e( 'hosted by Therum', 'nexus' ); ?></span>
+			<?php endif; ?>
 			<?php if ( $has_tok ): ?>
 				<span class="nexus-oauth-badge"><?php esc_html_e( '✓ token on file', 'nexus' ); ?></span>
 			<?php endif; ?>
 		</div>
-		<p class="nexus-oauth-help">
-			<?php esc_html_e( 'Create an OAuth app on the provider\'s developer console, register the redirect URI below, then paste the Client ID + Secret here. After saving, click "Sign in" to authorize.', 'nexus' ); ?>
-		</p>
-		<div class="nexus-oauth-redirect">
-			<label><?php esc_html_e( 'Redirect URI (register this with your OAuth app)', 'nexus' ); ?></label>
-			<input type="text" readonly value="<?php echo esc_attr( $redirect ); ?>" onclick="this.select()">
-			<?php if ( $register ): ?>
-				<a href="<?php echo esc_url( $register ); ?>" target="_blank" rel="noopener"><?php esc_html_e( 'Open developer console ↗', 'nexus' ); ?></a>
-			<?php endif; ?>
-		</div>
-		<div class="th-conn-field">
-			<label><?php esc_html_e( 'OAuth Client ID', 'nexus' ); ?></label>
-			<input type="password" class="th-input" data-field="oauth_client_id"
-				value="<?php echo $conf['oauth_client_id'] ?? '' ? '••••••••' : ''; ?>"
-				autocomplete="off">
-		</div>
-		<div class="th-conn-field">
-			<label><?php esc_html_e( 'OAuth Client Secret', 'nexus' ); ?></label>
-			<input type="password" class="th-input" data-field="oauth_client_secret"
-				value="<?php echo $conf['oauth_client_secret'] ?? '' ? '••••••••' : ''; ?>"
-				autocomplete="off">
-		</div>
-		<div class="nexus-oauth-signin-row">
-			<button type="button" class="th-button th-button-primary"
-				data-nexus-oauth-start="<?php echo esc_attr( $connector['id'] ); ?>">
-				<?php
-					printf(
-						/* translators: %s = provider name */
-						esc_html__( 'Sign in with %s →', 'nexus' ),
-						esc_html( $connector['name'] )
-					);
-				?>
-			</button>
-			<small><?php esc_html_e( 'Save the Client ID + Secret first if you haven\'t.', 'nexus' ); ?></small>
-		</div>
+
+		<?php if ( $hosted ): ?>
+			<p class="nexus-oauth-help">
+				<?php esc_html_e( 'One-click sign-in via the Therum OAuth proxy — no app setup required on your side. Click below and authorize on the provider\'s screen.', 'nexus' ); ?>
+			</p>
+			<div class="nexus-oauth-signin-row">
+				<button type="button" class="th-button th-button-primary"
+					data-nexus-oauth-start="<?php echo esc_attr( $connector['id'] ); ?>">
+					<?php
+						printf(
+							/* translators: %s = provider name */
+							esc_html__( 'Sign in with %s →', 'nexus' ),
+							esc_html( $connector['name'] )
+						);
+					?>
+				</button>
+			</div>
+		<?php else: ?>
+			<?php
+				$register = $cfg['docs_register_uri'] ?? '';
+				$redirect = nexus_oauth_redirect_uri( $connector['id'] );
+				$has_cid  = ! empty( $conf['oauth_client_id'] );
+				$has_sec  = ! empty( $conf['oauth_client_secret'] );
+			?>
+			<p class="nexus-oauth-help">
+				<?php esc_html_e( 'Create an OAuth app on the provider\'s developer console, register the redirect URI below, then paste the Client ID + Secret here. After saving, click "Sign in" to authorize.', 'nexus' ); ?>
+			</p>
+			<div class="nexus-oauth-redirect">
+				<label><?php esc_html_e( 'Redirect URI (register this with your OAuth app)', 'nexus' ); ?></label>
+				<input type="text" readonly value="<?php echo esc_attr( $redirect ); ?>" onclick="this.select()">
+				<?php if ( $register ): ?>
+					<a href="<?php echo esc_url( $register ); ?>" target="_blank" rel="noopener"><?php esc_html_e( 'Open developer console ↗', 'nexus' ); ?></a>
+				<?php endif; ?>
+			</div>
+			<div class="th-conn-field">
+				<label><?php esc_html_e( 'OAuth Client ID', 'nexus' ); ?></label>
+				<input type="password" class="th-input" data-field="oauth_client_id"
+					value="<?php echo $has_cid ? '••••••••' : ''; ?>"
+					autocomplete="off">
+			</div>
+			<div class="th-conn-field">
+				<label><?php esc_html_e( 'OAuth Client Secret', 'nexus' ); ?></label>
+				<input type="password" class="th-input" data-field="oauth_client_secret"
+					value="<?php echo $has_sec ? '••••••••' : ''; ?>"
+					autocomplete="off">
+			</div>
+			<div class="nexus-oauth-signin-row">
+				<button type="button" class="th-button th-button-primary"
+					data-nexus-oauth-start="<?php echo esc_attr( $connector['id'] ); ?>">
+					<?php
+						printf(
+							/* translators: %s = provider name */
+							esc_html__( 'Sign in with %s →', 'nexus' ),
+							esc_html( $connector['name'] )
+						);
+					?>
+				</button>
+				<small><?php esc_html_e( 'Click Sign in to save creds + start OAuth in one step.', 'nexus' ); ?></small>
+			</div>
+		<?php endif; ?>
+
 		<hr class="nexus-oauth-divider">
 		<p class="nexus-oauth-fallback-note">
 			<?php esc_html_e( 'Or paste credentials manually below (token / API key path).', 'nexus' ); ?>

@@ -1,5 +1,19 @@
 # Nexus by Therum — Changelog
 
+## [1.6.1] — 2026-06-04
+
+### Added
+- **Hosted-mode OAuth via the Therum proxy.** When `NEXUS_OAUTH_PROXY_URL` + `NEXUS_OAUTH_PROXY_SHARED_SECRET` are defined in `wp-config.php`, the Sign-in flow bypasses BYOA entirely — no per-install OAuth app needed. Sign-in button hits the proxy at `<proxy>/v1/start/<connector>`, proxy runs the dance using its own OAuth app credentials, returns HMAC-signed tokens to a new REST endpoint `/wp-json/nexus/v1/oauth-proxy-callback`. Nexus verifies the HMAC, persists the tokens.
+- **OAuth section UI auto-adapts.** In hosted mode, the Client ID/Secret fields and redirect URI panel disappear; the section shows a "hosted by Therum" badge instead. The OAuth Section's call-to-action becomes one click: Sign in.
+- **Replay protection.** Proxy-callback rejects payloads older than 5 minutes — even with a valid signature.
+
+### Fixed
+- **Sign-in-without-save bug.** Clicking "Sign in with X" inside the form now auto-saves the form first (in the BYOA path) before kicking off OAuth. Previously, if you pasted Client ID + Secret then clicked Sign in without clicking Save, the AJAX endpoint read empty values from the DB and alerted "Set your OAuth Client ID + Secret first." The JS now POSTs `nexus_connector_save` and waits for it before POSTing `nexus_oauth_start`.
+
+### Notes
+- The Cloudflare Worker proxy code + deployment docs live in a new sibling project: `therum-oauth-proxy/`. Not part of the Nexus plugin repo; deploy independently. See its README for setup.
+- BYOA mode is still fully supported and is the default if `NEXUS_OAUTH_PROXY_URL` is not defined. Existing 1.6.0 installs aren't affected.
+
 ## [1.6.0] — 2026-06-04
 
 ### Added
