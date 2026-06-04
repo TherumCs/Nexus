@@ -274,7 +274,6 @@ final class Nexus_Connections_Page {
 		$sections = [
 			'connectors' => __( 'Connections', 'nexus' ),
 			'channels'   => __( 'Channels', 'nexus' ),
-			'checkout'   => __( 'Checkout', 'nexus' ),
 			'manage'     => __( 'Manage', 'nexus' ),
 		];
 		$grouped = [];
@@ -450,18 +449,11 @@ add_action( 'init', function() {
 		'render'   => 'nexus_render_channels_tab',
 	] );
 
-	// Checkout — bundled multi-method checkout (Card / Wallets / BNPL /
-	// Bank / Crypto / P2P). Methods light up as their backing Nexus
-	// connectors are configured. Replaces what WooPayments does, with
-	// way more rails.
-	Nexus_Connections_Page::register( 'checkout-experience', [
-		'label'    => __( 'Checkout experience', 'nexus' ),
-		'section'  => 'checkout',
-		'priority' => 10,
-		'dot'      => '#e83b3b',
-		'desc'     => __( 'Multi-rail checkout. Card, wallets, BNPL, bank transfer, crypto, P2P — all in one form. Available as the [nexus_checkout] shortcode.', 'nexus' ),
-		'render'   => 'nexus_render_checkout_tab',
-	] );
+	// Checkout rendering lives in the Shop plugin (0.2.0+). Nexus stays
+	// focused on connector configuration; commerce surfaces consume
+	// nexus_connector_registry() + nexus_connector_is_configured() to
+	// build their own checkouts. The previous in-Nexus checkout (1.5.0)
+	// was removed in 1.5.1.
 }, 20 );
 
 

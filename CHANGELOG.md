@@ -1,5 +1,13 @@
 # Nexus by Therum — Changelog
 
+## [1.5.1] — 2026-06-04
+
+### Removed
+- **Checkout experience moved out of Nexus.** The bundled multi-rail checkout (added in 1.5.0) lived in the wrong layer — Nexus is the connector / integration plane, not a commerce surface. Removed `includes/checkout.php`, `templates/checkout-shell.php`, the `[nexus_checkout]` shortcode, the Checkout section in the sidebar, and the methods-status admin tab. Commerce surfaces (Shop plugin 0.2.0+, or a custom WC gateway) should now consume `nexus_connector_registry()` + `nexus_connector_is_configured()` to build their own checkouts on top of whatever payment connectors are configured here.
+
+### Notes
+- Nothing else changed — all 84 connectors, the Channels (product feed) generator, the Updates tab, validation, bridge_only support are intact.
+
 ## [1.5.0] — 2026-06-04
 
 ### Added
