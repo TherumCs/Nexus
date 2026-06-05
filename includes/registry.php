@@ -1077,6 +1077,17 @@ function nexus_connector_registry_builtin(): array {
 			],
 			'docs' => 'https://developer.calendly.com/api-docs/ZG9jOjMzNjEyMDQ2-getting-started',
 		],
+		'flow-desk' => [
+			'id' => 'flow-desk', 'name' => 'Flow Desk', 'category' => 'apps',
+			'color' => '#0066ff', 'initial' => 'Fd',
+			'desc'  => 'Unified workspace · email · calendar · messaging · CRM in one app. API key from account settings.',
+			'built_in' => false,
+			'fields' => [
+				[ 'key' => 'api_key',      'label' => 'API Key',      'type' => 'password', 'placeholder' => 'From Flow Desk → Settings → Developer / API', 'required' => true ],
+				[ 'key' => 'workspace_id', 'label' => 'Workspace ID', 'type' => 'text',     'placeholder' => 'Optional — scopes calls to one workspace',  'required' => false ],
+			],
+			'docs' => 'https://www.flowdesk.co/developers',
+		],
 		'figma' => [
 			'id' => 'figma', 'name' => 'Figma', 'category' => 'apps',
 			'color' => '#000000', 'initial' => 'Fg',
