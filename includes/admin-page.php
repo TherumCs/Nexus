@@ -12,8 +12,8 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 add_action( 'admin_menu', function() {
 	add_menu_page(
-		__( 'Connections', 'nexus' ),
-		__( 'Connections', 'nexus' ),
+		__( 'Nexus', 'nexus' ),          // <title> shown in the browser tab
+		__( 'Nexus', 'nexus' ),          // sidebar menu label
 		'manage_options',
 		'nexus',
 		[ 'Nexus_Connections_Page', 'render' ],
@@ -152,8 +152,8 @@ final class Nexus_Connections_Page {
 
 			<div class="th-cx-head">
 				<div>
-					<div class="th-cx-eyebrow"><?php esc_html_e( 'Admin · Connections', 'nexus' ); ?></div>
-					<h1 class="th-cx-title"><?php esc_html_e( 'Connections', 'nexus' ); ?></h1>
+					<div class="th-cx-eyebrow"><?php esc_html_e( 'Connector platform · by Therum', 'nexus' ); ?></div>
+					<h1 class="th-cx-title"><?php esc_html_e( 'Nexus', 'nexus' ); ?></h1>
 					<p class="th-cx-sub"><?php esc_html_e( 'Wire WordPress to the outside world. AI models, APIs, payment gateways, and external apps — all behind one canonical surface with saved credentials per connector.', 'nexus' ); ?></p>
 				</div>
 				<div class="th-cn-status-strip">
