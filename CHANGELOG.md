@@ -1,5 +1,32 @@
 # Nexus by Therum — Changelog
 
+## [2.3.0] — 2026-06-06
+
+Meta catalog field completeness pass. Audited Meta Commerce Manager's canonical CSV header against what we were emitting and closed every gap so a Nexus → Meta sync now maps 1:1 instead of leaving 10+ fields blank.
+
+### Added — full Meta catalog field coverage
+- **Per-product overrides expanded from 6 to 19 fields.** New fields: `size_type`, `size_system`, `multipack`, `is_bundle`, `availability_date`, `cost_of_goods_sold`, `adult`, `video_link`, `additional_video_link`, `custom_label_0` through `custom_label_4`.
+- **Product meta box rebuilt** as collapsible sections: Identifiers · Category + Condition · Apparel Sizing (Meta) · Bundle + Multipack · Availability + COGS · Video · Custom Labels (ad-set targeting).
+- **`product_type` auto-derivation** from the WC category breadcrumb. Walks the deepest term's ancestor chain ("Apparel > Tops > T-Shirts"). Meta/Google use this as the merchant taxonomy for ad-set targeting and on-platform browse, separately from `google_product_category`.
+- **`identifier_exists` auto-detection** — emitted as `"no"` when neither GTIN nor MPN is present (handmade/custom/vintage). Now lands in both CSV and XML; previously XML-only.
+- **`cost_of_goods_sold` auto-detect** from the WC Cost of Goods Sold plugin meta (`_wc_cog_cost`) plus common fallbacks (`_cogs_cost`, `_cost`, `_cost_price`). Per-product override always wins. Drives Meta + Google profit-based bidding.
+
+### Added — preorder + backorder availability
+- New `availability` states: `preorder` (out of stock + explicit `availability_date` set) and `backorder` (out of stock + WC backorders enabled).
+- Per-channel wire format: Meta/Pinterest/TikTok use `"available for order"`; Google/Bing use `"backorder"`. Meta accepts `"preorder"` directly.
+- `availability_date` (ISO-8601) emitted whenever set so Meta shows the release-date badge.
+
+### Added — Meta CSV header expansion
+- `meta-catalog` CSV now includes: `availability_date`, `identifier_exists`, `product_type`, `size_type`, `size_system`, `multipack`, `is_bundle`, `cost_of_goods_sold`, `adult`, `video[url]`, `additional_video_link`, `custom_label_0`–`custom_label_4`.
+- Pinterest, TikTok, Bing CSVs each get the subset they support (size_type/size_system/multipack/is_bundle/adult/video_link as applicable).
+
+### Added — Google Shopping XML field expansion
+- New `<g:>` elements emitted when present: `availability_date`, `product_type`, `size_type`, `size_system`, `multipack`, `is_bundle`, `cost_of_goods_sold`, `adult`, `video_link`, `additional_video_link` (split on comma → one element per URL), `custom_label_0`–`custom_label_4`.
+- `<g:availability>` now goes through the per-channel formatter (was previously emitting the raw `in_stock`/`out_of_stock` token — Google accepts both forms, but this now picks up `preorder` and `backorder` correctly).
+
+### Changed
+- `save_post_product` handler now walks the full `NEXUS_FEED_OVERRIDE_KEYS` map by table instead of a hardcoded 6-key list, so any future override field automatically persists without code changes.
+
 ## [2.2.0] — 2026-06-04
 
 Round 3 on Channels. This is the round meant to put us decisively past CTX Feed Pro on the things merchants actually hit pain on.

@@ -34,12 +34,28 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 // ═════════════════════════════════════════════════════════════════════════════
 
 const NEXUS_FEED_OVERRIDE_KEYS = [
+	// Core identifiers
 	'brand'                   => '_nexus_feed_brand',
 	'gtin'                    => '_nexus_feed_gtin',
 	'mpn'                     => '_nexus_feed_mpn',
 	'google_product_category' => '_nexus_feed_google_category',
 	'condition'               => '_nexus_feed_condition',
 	'excluded'                => '_nexus_feed_exclude',
+	// Meta-spec extensions (2.3.0)
+	'size_type'               => '_nexus_feed_size_type',     // regular | petite | plus | big and tall | maternity
+	'size_system'             => '_nexus_feed_size_system',   // US | UK | EU | DE | FR | JP | CN | IT | BR | MEX | AU
+	'multipack'               => '_nexus_feed_multipack',     // integer
+	'is_bundle'               => '_nexus_feed_is_bundle',     // yes | no
+	'availability_date'       => '_nexus_feed_avail_date',    // ISO 8601 for preorder release
+	'cost_of_goods_sold'      => '_nexus_feed_cogs',          // for ROAS reporting
+	'adult'                   => '_nexus_feed_adult',         // yes | no
+	'video_link'              => '_nexus_feed_video',         // single URL
+	'additional_video_link'   => '_nexus_feed_videos_extra',  // comma-separated URLs
+	'custom_label_0'          => '_nexus_feed_cl0',
+	'custom_label_1'          => '_nexus_feed_cl1',
+	'custom_label_2'          => '_nexus_feed_cl2',
+	'custom_label_3'          => '_nexus_feed_cl3',
+	'custom_label_4'          => '_nexus_feed_cl4',
 ];
 
 add_action( 'add_meta_boxes', function() {
@@ -55,35 +71,102 @@ add_action( 'add_meta_boxes', function() {
 } );
 
 function nexus_feed_render_product_meta_box( $post ): void {
-	$brand     = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['brand'], true );
-	$gtin      = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['gtin'], true );
-	$mpn       = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['mpn'], true );
-	$cat       = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['google_product_category'], true );
-	$condition = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['condition'], true );
-	$excluded  = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['excluded'], true ) === '1';
+	$get = function( $key ) use ( $post ) {
+		return get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS[ $key ], true );
+	};
+	$excluded = $get( 'excluded' ) === '1';
 	wp_nonce_field( 'nexus_feed_meta', 'nexus_feed_nonce' );
 	?>
-	<p style="font-size:11px;color:#666;margin:0 0 10px">Overrides the global feed defaults for this product. Leave blank to use channel-level fallbacks.</p>
+	<p style="font-size:11px;color:#666;margin:0 0 10px">Overrides feed defaults for this product. Blank = use channel-level fallback.</p>
+
 	<p>
 		<label style="display:flex;align-items:center;gap:6px;font-weight:600">
 			<input type="checkbox" name="nexus_feed_exclude" value="1" <?php checked( $excluded ); ?>>
-			Exclude this product from all feeds
+			Exclude from all feeds
 		</label>
 	</p>
-	<p><label>Brand<br><input type="text" name="nexus_feed_brand" value="<?php echo esc_attr( $brand ); ?>" style="width:100%" placeholder="Override default"></label></p>
-	<p><label>GTIN<br><input type="text" name="nexus_feed_gtin" value="<?php echo esc_attr( $gtin ); ?>" style="width:100%" placeholder="14-digit code (UPC/EAN/ISBN)"></label></p>
-	<p><label>MPN<br><input type="text" name="nexus_feed_mpn" value="<?php echo esc_attr( $mpn ); ?>" style="width:100%" placeholder="Manufacturer part number"></label></p>
-	<p><label>Google product category<br><input type="text" name="nexus_feed_google_category" value="<?php echo esc_attr( $cat ); ?>" style="width:100%" placeholder="e.g. Apparel > Tops > T-Shirts"></label></p>
-	<p>
-		<label>Condition<br>
-			<select name="nexus_feed_condition" style="width:100%">
-				<option value="" <?php selected( $condition, '' ); ?>>— default —</option>
-				<option value="new" <?php selected( $condition, 'new' ); ?>>New</option>
-				<option value="used" <?php selected( $condition, 'used' ); ?>>Used</option>
-				<option value="refurbished" <?php selected( $condition, 'refurbished' ); ?>>Refurbished</option>
-			</select>
-		</label>
-	</p>
+
+	<details open><summary style="cursor:pointer;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;margin:10px 0 6px">Identifiers</summary>
+		<p><label>Brand<br><input type="text" name="nexus_feed_brand" value="<?php echo esc_attr( $get( 'brand' ) ); ?>" style="width:100%"></label></p>
+		<p><label>GTIN<br><input type="text" name="nexus_feed_gtin" value="<?php echo esc_attr( $get( 'gtin' ) ); ?>" style="width:100%" placeholder="8/12/13/14-digit UPC/EAN/ISBN"></label></p>
+		<p><label>MPN<br><input type="text" name="nexus_feed_mpn" value="<?php echo esc_attr( $get( 'mpn' ) ); ?>" style="width:100%"></label></p>
+	</details>
+
+	<details><summary style="cursor:pointer;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;margin:10px 0 6px">Category + condition</summary>
+		<p><label>Google product category<br><input type="text" name="nexus_feed_google_category" value="<?php echo esc_attr( $get( 'google_product_category' ) ); ?>" style="width:100%" placeholder="e.g. Apparel > Tops > T-Shirts"></label></p>
+		<p>
+			<label>Condition<br>
+				<select name="nexus_feed_condition" style="width:100%">
+					<option value="" <?php selected( $get( 'condition' ), '' ); ?>>— default —</option>
+					<option value="new" <?php selected( $get( 'condition' ), 'new' ); ?>>New</option>
+					<option value="used" <?php selected( $get( 'condition' ), 'used' ); ?>>Used</option>
+					<option value="refurbished" <?php selected( $get( 'condition' ), 'refurbished' ); ?>>Refurbished</option>
+				</select>
+			</label>
+		</p>
+	</details>
+
+	<details><summary style="cursor:pointer;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;margin:10px 0 6px">Apparel sizing (Meta)</summary>
+		<p>
+			<label>Size type<br>
+				<select name="nexus_feed_size_type" style="width:100%">
+					<option value="">— default —</option>
+					<?php foreach ( [ 'regular', 'petite', 'plus', 'big and tall', 'maternity' ] as $opt ): ?>
+						<option value="<?php echo esc_attr( $opt ); ?>" <?php selected( $get( 'size_type' ), $opt ); ?>><?php echo esc_html( $opt ); ?></option>
+					<?php endforeach; ?>
+				</select>
+			</label>
+		</p>
+		<p>
+			<label>Size system<br>
+				<select name="nexus_feed_size_system" style="width:100%">
+					<option value="">— default —</option>
+					<?php foreach ( [ 'US', 'UK', 'EU', 'DE', 'FR', 'JP', 'CN', 'IT', 'BR', 'MEX', 'AU' ] as $opt ): ?>
+						<option value="<?php echo esc_attr( $opt ); ?>" <?php selected( $get( 'size_system' ), $opt ); ?>><?php echo esc_html( $opt ); ?></option>
+					<?php endforeach; ?>
+				</select>
+			</label>
+		</p>
+	</details>
+
+	<details><summary style="cursor:pointer;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;margin:10px 0 6px">Bundle + multipack</summary>
+		<p><label>Multipack<br><input type="number" min="0" name="nexus_feed_multipack" value="<?php echo esc_attr( $get( 'multipack' ) ); ?>" style="width:100%" placeholder="e.g. 6 (pack of 6)"></label></p>
+		<p>
+			<label>Is bundle?<br>
+				<select name="nexus_feed_is_bundle" style="width:100%">
+					<option value="" <?php selected( $get( 'is_bundle' ), '' ); ?>>— default —</option>
+					<option value="yes" <?php selected( $get( 'is_bundle' ), 'yes' ); ?>>Yes</option>
+					<option value="no"  <?php selected( $get( 'is_bundle' ), 'no'  ); ?>>No</option>
+				</select>
+			</label>
+		</p>
+	</details>
+
+	<details><summary style="cursor:pointer;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;margin:10px 0 6px">Availability + COGS</summary>
+		<p><label>Availability date (preorder release)<br><input type="text" name="nexus_feed_avail_date" value="<?php echo esc_attr( $get( 'availability_date' ) ); ?>" style="width:100%" placeholder="ISO 8601 e.g. 2026-08-01T00:00-0800"></label></p>
+		<p><label>Cost of goods sold<br><input type="text" name="nexus_feed_cogs" value="<?php echo esc_attr( $get( 'cost_of_goods_sold' ) ); ?>" style="width:100%" placeholder="e.g. 12.50 USD (for ROAS)"></label></p>
+		<p>
+			<label>Adult content<br>
+				<select name="nexus_feed_adult" style="width:100%">
+					<option value="" <?php selected( $get( 'adult' ), '' ); ?>>— default (no) —</option>
+					<option value="yes" <?php selected( $get( 'adult' ), 'yes' ); ?>>Yes (18+)</option>
+					<option value="no"  <?php selected( $get( 'adult' ), 'no'  ); ?>>No</option>
+				</select>
+			</label>
+		</p>
+	</details>
+
+	<details><summary style="cursor:pointer;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;margin:10px 0 6px">Video</summary>
+		<p><label>Video link<br><input type="url" name="nexus_feed_video" value="<?php echo esc_attr( $get( 'video_link' ) ); ?>" style="width:100%" placeholder="https://…"></label></p>
+		<p><label>Additional video links<br><input type="text" name="nexus_feed_videos_extra" value="<?php echo esc_attr( $get( 'additional_video_link' ) ); ?>" style="width:100%" placeholder="Comma-separated URLs"></label></p>
+	</details>
+
+	<details><summary style="cursor:pointer;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;margin:10px 0 6px">Custom labels (ad set targeting)</summary>
+		<p style="font-size:10px;color:#999;margin:0 0 6px">Free-form. Meta uses these for dynamic ad set segmentation (top-sellers, seasonal, margin tier, etc.).</p>
+		<?php for ( $i = 0; $i <= 4; $i++ ): ?>
+			<p><label>custom_label_<?php echo $i; ?><br><input type="text" name="nexus_feed_cl<?php echo $i; ?>" value="<?php echo esc_attr( $get( 'custom_label_' . $i ) ); ?>" style="width:100%"></label></p>
+		<?php endfor; ?>
+	</details>
 	<?php
 }
 
@@ -92,14 +175,30 @@ add_action( 'save_post_product', function( $post_id ) {
 	if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
 	if ( ! current_user_can( 'edit_post', $post_id ) ) return;
 
-	$map = [
-		'brand'                    => 'nexus_feed_brand',
-		'gtin'                     => 'nexus_feed_gtin',
-		'mpn'                      => 'nexus_feed_mpn',
-		'google_product_category'  => 'nexus_feed_google_category',
-		'condition'                => 'nexus_feed_condition',
+	// Form key → override-keys map. Saves any non-blank, deletes blanks
+	// so each row stays small. Mirrors the meta box exactly.
+	$post_map = [
+		'brand'                   => 'nexus_feed_brand',
+		'gtin'                    => 'nexus_feed_gtin',
+		'mpn'                     => 'nexus_feed_mpn',
+		'google_product_category' => 'nexus_feed_google_category',
+		'condition'               => 'nexus_feed_condition',
+		'size_type'               => 'nexus_feed_size_type',
+		'size_system'             => 'nexus_feed_size_system',
+		'multipack'               => 'nexus_feed_multipack',
+		'is_bundle'               => 'nexus_feed_is_bundle',
+		'availability_date'       => 'nexus_feed_avail_date',
+		'cost_of_goods_sold'      => 'nexus_feed_cogs',
+		'adult'                   => 'nexus_feed_adult',
+		'video_link'              => 'nexus_feed_video',
+		'additional_video_link'   => 'nexus_feed_videos_extra',
+		'custom_label_0'          => 'nexus_feed_cl0',
+		'custom_label_1'          => 'nexus_feed_cl1',
+		'custom_label_2'          => 'nexus_feed_cl2',
+		'custom_label_3'          => 'nexus_feed_cl3',
+		'custom_label_4'          => 'nexus_feed_cl4',
 	];
-	foreach ( $map as $field => $post_key ) {
+	foreach ( $post_map as $field => $post_key ) {
 		$v = isset( $_POST[ $post_key ] ) ? sanitize_text_field( wp_unslash( $_POST[ $post_key ] ) ) : '';
 		if ( $v === '' ) {
 			delete_post_meta( $post_id, NEXUS_FEED_OVERRIDE_KEYS[ $field ] );
@@ -107,6 +206,7 @@ add_action( 'save_post_product', function( $post_id ) {
 			update_post_meta( $post_id, NEXUS_FEED_OVERRIDE_KEYS[ $field ], $v );
 		}
 	}
+
 	$excluded = isset( $_POST['nexus_feed_exclude'] ) && $_POST['nexus_feed_exclude'] === '1';
 	if ( $excluded ) {
 		update_post_meta( $post_id, NEXUS_FEED_OVERRIDE_KEYS['excluded'], '1' );
@@ -114,7 +214,6 @@ add_action( 'save_post_product', function( $post_id ) {
 		delete_post_meta( $post_id, NEXUS_FEED_OVERRIDE_KEYS['excluded'] );
 	}
 
-	// Bust any cached feed so the next fetch reflects the change.
 	nexus_feed_invalidate_cache();
 }, 10, 1 );
 
@@ -793,12 +892,29 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 	// precedence over every auto-detect chain below. The product editor
 	// is the one place where a human said "this product specifically
 	// needs X" — respect that without fallback.
-	$parent_or_self_id = $parent ? $parent->get_id() : $id;
-	$override_brand     = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['brand'], true );
-	$override_gtin      = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['gtin'], true );
-	$override_mpn       = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['mpn'], true );
-	$override_gcat      = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['google_product_category'], true );
-	$override_condition = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['condition'], true );
+	$parent_or_self_id  = $parent ? $parent->get_id() : $id;
+	$ov = function( string $key ) use ( $parent_or_self_id ): string {
+		return (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS[ $key ], true );
+	};
+	$override_brand        = $ov( 'brand' );
+	$override_gtin         = $ov( 'gtin' );
+	$override_mpn          = $ov( 'mpn' );
+	$override_gcat         = $ov( 'google_product_category' );
+	$override_condition    = $ov( 'condition' );
+	$override_size_type    = $ov( 'size_type' );
+	$override_size_system  = $ov( 'size_system' );
+	$override_multipack    = $ov( 'multipack' );
+	$override_is_bundle    = $ov( 'is_bundle' );
+	$override_avail_date   = $ov( 'availability_date' );
+	$override_cogs         = $ov( 'cost_of_goods_sold' );
+	$override_adult        = $ov( 'adult' );
+	$override_video        = $ov( 'video_link' );
+	$override_videos_extra = $ov( 'additional_video_link' );
+	$override_cl0          = $ov( 'custom_label_0' );
+	$override_cl1          = $ov( 'custom_label_1' );
+	$override_cl2          = $ov( 'custom_label_2' );
+	$override_cl3          = $ov( 'custom_label_3' );
+	$override_cl4          = $ov( 'custom_label_4' );
 
 	// Brand — auto-detect chain. Tries every common storage location before
 	// the user-configured fallback, so a typical WC store doesn't need to
@@ -911,6 +1027,21 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 	if ( $qty === null ) {
 		$qty = $availability === 'in_stock' ? 99 : 0;
 	}
+	// Preorder detection. If the user set an explicit availability_date
+	// override AND we're not currently in stock, treat as "preorder" — Meta
+	// shows a preorder badge and accepts orders ahead of the release date.
+	// Also catches WC backorder products that are out of stock but allow
+	// backorders ("preorder" semantically matches Meta/Google's backorder).
+	$avail_date = $override_avail_date;
+	if ( $availability === 'out_of_stock' ) {
+		$backorders = $product->get_backorders();
+		if ( $backorders === 'yes' || $backorders === 'notify' ) {
+			$availability = 'backorder';
+		}
+		if ( $avail_date ) {
+			$availability = 'preorder';
+		}
+	}
 
 	// Shipping weight (Meta + Google use this for shipping cost calc).
 	$weight = '';
@@ -919,6 +1050,83 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 	} elseif ( $parent && $parent->has_weight() ) {
 		$weight = $parent->get_weight() . ' ' . get_option( 'woocommerce_weight_unit', 'kg' );
 	}
+
+	// product_type — derived from the WC category breadcrumb of the parent
+	// (or self if simple). Meta/Google use this as the merchant's own
+	// taxonomy ("Apparel > Tops > T-Shirts") which they prefer over the
+	// google_product_category for ad-set targeting and on-platform browse.
+	$product_type = '';
+	$cat_terms = get_the_terms( $parent_or_self_id, 'product_cat' );
+	if ( $cat_terms && ! is_wp_error( $cat_terms ) ) {
+		// Pick the deepest term (most specific) — that's the one with the
+		// longest ancestor chain. Tiebreak: first one returned.
+		$deepest = null;
+		$deepest_depth = -1;
+		foreach ( $cat_terms as $t ) {
+			$ancestors = get_ancestors( $t->term_id, 'product_cat' );
+			$depth = count( $ancestors );
+			if ( $depth > $deepest_depth ) {
+				$deepest = $t;
+				$deepest_depth = $depth;
+			}
+		}
+		if ( $deepest ) {
+			$chain = array_reverse( get_ancestors( $deepest->term_id, 'product_cat' ) );
+			$names = [];
+			foreach ( $chain as $aid ) {
+				$at = get_term( $aid, 'product_cat' );
+				if ( $at && ! is_wp_error( $at ) ) $names[] = $at->name;
+			}
+			$names[]      = $deepest->name;
+			$product_type = implode( ' > ', $names );
+		}
+	}
+
+	// Cost of goods sold — auto-detect. WC's Cost of Goods Sold plugin
+	// (and several third-party variants) all standardize on `_wc_cog_cost`.
+	// Per-product meta-box override wins. Numeric only.
+	$cogs = $override_cogs;
+	if ( ! $cogs ) {
+		foreach ( [ '_wc_cog_cost', '_cogs_cost', '_cost', '_cost_price' ] as $k ) {
+			$v = (string) $product->get_meta( $k );
+			if ( ! $v && $parent ) $v = (string) $parent->get_meta( $k );
+			if ( $v !== '' && is_numeric( $v ) ) { $cogs = number_format( (float) $v, 2, '.', '' ); break; }
+		}
+	}
+
+	// identifier_exists — Meta/Google flag for items without a real GTIN/MPN.
+	// "yes" (or omit) for branded products with valid IDs, "no" for custom /
+	// handmade / vintage where no UPC exists. Auto-derive from presence.
+	$identifier_exists = ( $gtin || ( $brand && $mpn ) ) ? 'yes' : 'no';
+
+	// Apparel sizing — overrides only (no sane way to auto-derive). Default
+	// blank; Meta tolerates absence on most categories.
+	$size_type   = $override_size_type;
+	$size_system = $override_size_system;
+
+	// Bundle / multipack — overrides only. is_bundle is a yes/no flag in
+	// Meta; multipack is an integer (number of units in the SKU).
+	$is_bundle = $override_is_bundle === '1' ? 'yes' : '';
+	$multipack = ctype_digit( $override_multipack ) ? (int) $override_multipack : '';
+
+	// Adult flag. WC's "adult content" mark could live in several places —
+	// for now only honor the explicit override + the post's `_adult_only`
+	// meta which a few erotica plugins use.
+	$adult = $override_adult;
+	if ( ! $adult ) {
+		$am = (string) $product->get_meta( '_adult_only' );
+		if ( $am === '1' || $am === 'yes' ) $adult = 'yes';
+	}
+
+	// Custom labels 0-4 — Google + Meta accept these as opaque ad-set
+	// segmentation tags. Override-only.
+	$custom_labels = [
+		$override_cl0,
+		$override_cl1,
+		$override_cl2,
+		$override_cl3,
+		$override_cl4,
+	];
 
 	return [
 		'id'           => $sku,
@@ -933,12 +1141,14 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 		'currency'     => (string) ( $config['currency'] ?? get_woocommerce_currency() ),
 		// Raw machine-friendly value. Renderers convert this per-channel
 		// to the format each platform actually requires.
-		'availability' => $availability,    // 'in_stock' | 'out_of_stock'
+		'availability' => $availability,    // 'in_stock' | 'out_of_stock' | 'preorder' | 'backorder'
+		'availability_date' => $avail_date, // ISO-8601, only set for preorder/backorder
 		'inventory'    => (int) $qty,       // Meta / IG — quantity_to_sell_on_facebook
 		'condition'    => $override_condition ?: (string) ( $config['condition'] ?? 'new' ),
 		'brand'        => $brand,
 		'gtin'         => $gtin,
 		'mpn'          => $mpn,
+		'identifier_exists' => $identifier_exists,
 		// Resolution order for google_product_category:
 		//   1. Per-product meta-box override (most specific)
 		//   2. WC category → Google taxonomy mapping (next-most specific)
@@ -947,14 +1157,28 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 			?: nexus_feed_taxonomy_for_product( $parent_or_self_id )
 			?: (string) ( $config['google_product_category'] ?? '' ),
 		'fb_product_category'     => (string) ( $config['fb_product_category']     ?? '' ),
+		'product_type'            => $product_type, // merchant taxonomy from WC category chain
 		'item_group_id'           => $parent ? (string) $parent->get_id() : '',
 		'color'        => $color,
 		'size'         => $size,
+		'size_type'    => $size_type,    // 'regular' | 'petite' | 'plus' | 'big and tall' | 'maternity'
+		'size_system'  => $size_system,  // 'US' | 'UK' | 'EU' | 'AU' | 'BR' | 'CN' | 'FR' | 'DE' | 'IT' | 'JP' | 'MEX'
 		'material'     => $material,
 		'pattern'      => $pattern,
 		'gender'       => $gender,
 		'age_group'    => $age_group,
 		'weight'       => $weight,
+		'multipack'    => $multipack,
+		'is_bundle'    => $is_bundle,
+		'cost_of_goods_sold' => $cogs,
+		'adult'        => $adult,
+		'video_link'   => $override_video,
+		'additional_video_link' => $override_videos_extra,
+		'custom_label_0' => $custom_labels[0],
+		'custom_label_1' => $custom_labels[1],
+		'custom_label_2' => $custom_labels[2],
+		'custom_label_3' => $custom_labels[3],
+		'custom_label_4' => $custom_labels[4],
 	];
 }
 
@@ -980,6 +1204,21 @@ function nexus_feed_availability_for( string $channel_id, string $value ): strin
 			'tiktok-shop'       => 'out of stock',
 			'google-shopping'   => 'out_of_stock',
 			'bing-merchant'     => 'out_of_stock',
+		],
+		'preorder'     => [
+			'meta-catalog'      => 'preorder',
+			'pinterest-catalog' => 'preorder',
+			'tiktok-shop'       => 'preorder',
+			'google-shopping'   => 'preorder',
+			'bing-merchant'     => 'preorder',
+		],
+		'backorder'    => [
+			// Meta/Pinterest use 'available for order'; Google + Bing use 'backorder'.
+			'meta-catalog'      => 'available for order',
+			'pinterest-catalog' => 'available for order',
+			'tiktok-shop'       => 'available for order',
+			'google-shopping'   => 'backorder',
+			'bing-merchant'     => 'backorder',
 		],
 	];
 	return $map[ $value ][ $channel_id ] ?? $value;
@@ -1040,7 +1279,11 @@ function nexus_feed_render_google_xml( array $items, array $config ): string {
 				$xml .= '  <g:sale_price_effective_date>' . nexus_feed_xml( $i['sale_price_effective_date'] ) . "</g:sale_price_effective_date>\n";
 			}
 		}
-		$xml .= '  <g:availability>' . nexus_feed_xml( $i['availability'] ) . "</g:availability>\n";
+		// availability — convert the normalized value to Google's wire format.
+		$xml .= '  <g:availability>' . nexus_feed_xml( nexus_feed_availability_for( 'google-shopping', $i['availability'] ) ) . "</g:availability>\n";
+		if ( ! empty( $i['availability_date'] ) ) {
+			$xml .= '  <g:availability_date>' . nexus_feed_xml( $i['availability_date'] ) . "</g:availability_date>\n";
+		}
 		// Quantity. Google's field is `quantity_to_sell_on_facebook` (yes,
 		// even in Google's spec — Meta historically piggy-backed). Also
 		// IG/FB pull this when Google is the sync source.
@@ -1051,16 +1294,45 @@ function nexus_feed_render_google_xml( array $items, array $config ): string {
 		$xml .= '  <g:brand>'     . nexus_feed_xml( $i['brand'] )     . "</g:brand>\n";
 		if ( $i['gtin'] )                    $xml .= '  <g:gtin>' . nexus_feed_xml( $i['gtin'] ) . "</g:gtin>\n";
 		if ( $i['mpn'] )                     $xml .= '  <g:mpn>'  . nexus_feed_xml( $i['mpn'] )  . "</g:mpn>\n";
-		if ( ! $i['gtin'] && ! $i['mpn'] )   $xml .= "  <g:identifier_exists>no</g:identifier_exists>\n";
+		// identifier_exists — explicit "no" when neither GTIN nor MPN is present.
+		// Otherwise honor the per-item value (handmade/custom = "no" even if
+		// brand+something else are present).
+		if ( ! empty( $i['identifier_exists'] ) && $i['identifier_exists'] === 'no' ) {
+			$xml .= "  <g:identifier_exists>no</g:identifier_exists>\n";
+		} elseif ( ! $i['gtin'] && ! $i['mpn'] ) {
+			$xml .= "  <g:identifier_exists>no</g:identifier_exists>\n";
+		}
 		if ( $i['google_product_category'] ) $xml .= '  <g:google_product_category>' . nexus_feed_xml( $i['google_product_category'] ) . "</g:google_product_category>\n";
+		if ( ! empty( $i['product_type'] ) ) $xml .= '  <g:product_type>' . nexus_feed_xml( $i['product_type'] ) . "</g:product_type>\n";
 		if ( $i['item_group_id'] )           $xml .= '  <g:item_group_id>' . nexus_feed_xml( $i['item_group_id'] ) . "</g:item_group_id>\n";
 		// Variant attributes — Google's apparel feed requires color/size/etc.
-		foreach ( [ 'color', 'size', 'material', 'pattern', 'gender', 'age_group' ] as $attr ) {
+		foreach ( [ 'color', 'size', 'size_type', 'size_system', 'material', 'pattern', 'gender', 'age_group' ] as $attr ) {
 			if ( ! empty( $i[ $attr ] ) ) {
 				$xml .= '  <g:' . $attr . '>' . nexus_feed_xml( $i[ $attr ] ) . '</g:' . $attr . ">\n";
 			}
 		}
 		if ( $i['weight'] ) $xml .= '  <g:shipping_weight>' . nexus_feed_xml( $i['weight'] ) . "</g:shipping_weight>\n";
+		// Bundle / multipack — Google accepts both at the item level for
+		// SKU disambiguation (a 4-pack of a single-pack base SKU).
+		if ( ! empty( $i['multipack'] ) ) $xml .= '  <g:multipack>' . (int) $i['multipack'] . "</g:multipack>\n";
+		if ( ! empty( $i['is_bundle'] ) ) $xml .= '  <g:is_bundle>' . nexus_feed_xml( $i['is_bundle'] ) . "</g:is_bundle>\n";
+		// COGS — Google calls this cost_of_goods_sold; used in profit-based
+		// bidding optimizations.
+		if ( ! empty( $i['cost_of_goods_sold'] ) ) {
+			$xml .= '  <g:cost_of_goods_sold>' . nexus_feed_xml( $i['cost_of_goods_sold'] . ' ' . $i['currency'] ) . "</g:cost_of_goods_sold>\n";
+		}
+		if ( ! empty( $i['adult'] ) )      $xml .= '  <g:adult>' . nexus_feed_xml( $i['adult'] ) . "</g:adult>\n";
+		if ( ! empty( $i['video_link'] ) ) $xml .= '  <g:video_link>' . nexus_feed_xml( $i['video_link'] ) . "</g:video_link>\n";
+		if ( ! empty( $i['additional_video_link'] ) ) {
+			foreach ( array_filter( array_map( 'trim', explode( ',', (string) $i['additional_video_link'] ) ) ) as $vurl ) {
+				$xml .= '  <g:additional_video_link>' . nexus_feed_xml( $vurl ) . "</g:additional_video_link>\n";
+			}
+		}
+		// Custom labels 0-4 — Google ad-set segmentation tags.
+		for ( $cli = 0; $cli < 5; $cli++ ) {
+			$ck = 'custom_label_' . $cli;
+			if ( ! empty( $i[ $ck ] ) ) $xml .= '  <g:' . $ck . '>' . nexus_feed_xml( $i[ $ck ] ) . '</g:' . $ck . ">\n";
+		}
 		$xml .= "</item>\n";
 	}
 
@@ -1092,6 +1364,7 @@ function nexus_feed_render_csv( array $items, string $channel_id, array $config 
 		'image_link'                  => 'image_link',
 		'additional_image_link'       => 'additional_image_link',
 		'availability'                => '_availability_channel',
+		'availability_date'           => 'availability_date',
 		'condition'                   => 'condition',
 		'price'                       => '_price_with_currency',
 		'sale_price'                  => '_sale_price_with_currency',
@@ -1099,7 +1372,9 @@ function nexus_feed_render_csv( array $items, string $channel_id, array $config 
 		'brand'                       => 'brand',
 		'gtin'                        => 'gtin',
 		'mpn'                         => 'mpn',
+		'identifier_exists'           => 'identifier_exists',
 		'google_product_category'     => 'google_product_category',
+		'product_type'                => 'product_type',
 		'item_group_id'               => 'item_group_id',
 		'color'                       => 'color',
 		'size'                        => 'size',
@@ -1108,6 +1383,11 @@ function nexus_feed_render_csv( array $items, string $channel_id, array $config 
 		'gender'                      => 'gender',
 		'age_group'                   => 'age_group',
 		'shipping_weight'             => 'weight',
+		'custom_label_0'              => 'custom_label_0',
+		'custom_label_1'              => 'custom_label_1',
+		'custom_label_2'              => 'custom_label_2',
+		'custom_label_3'              => 'custom_label_3',
+		'custom_label_4'              => 'custom_label_4',
 	];
 
 	// Channel-specific tweaks — header NAMES differ across channels for
@@ -1116,17 +1396,38 @@ function nexus_feed_render_csv( array $items, string $channel_id, array $config 
 	// Instagram Shopping silently drops the inventory count.
 	switch ( $channel_id ) {
 		case 'meta-catalog':
+			// Meta Commerce Manager canonical extras — these are the columns
+			// IG/FB ad teams actually use for catalog optimization. Order
+			// here matters for human readability of the export but Meta
+			// matches on header name so it's tolerant.
 			$columns['quantity_to_sell_on_facebook'] = 'inventory';
 			$columns['fb_product_category']          = 'fb_product_category';
+			$columns['size_type']                    = 'size_type';
+			$columns['size_system']                  = 'size_system';
+			$columns['multipack']                    = 'multipack';
+			$columns['is_bundle']                    = 'is_bundle';
+			$columns['cost_of_goods_sold']           = 'cost_of_goods_sold';
+			$columns['adult']                        = 'adult';
+			$columns['video[url]']                   = 'video_link';
+			$columns['additional_video_link']        = 'additional_video_link';
 			break;
 		case 'pinterest-catalog':
-			$columns['inventory'] = 'inventory';
+			$columns['inventory']            = 'inventory';
+			$columns['size_type']            = 'size_type';
+			$columns['size_system']          = 'size_system';
+			$columns['adult']                = 'adult';
+			$columns['video_link']           = 'video_link';
 			break;
 		case 'tiktok-shop':
-			$columns['quantity']  = 'inventory';
+			$columns['quantity']             = 'inventory';
+			$columns['video_link']           = 'video_link';
 			break;
 		case 'bing-merchant':
-			$columns['inventory'] = 'inventory';
+			$columns['inventory']            = 'inventory';
+			$columns['size_type']            = 'size_type';
+			$columns['size_system']          = 'size_system';
+			$columns['multipack']            = 'multipack';
+			$columns['is_bundle']            = 'is_bundle';
 			break;
 	}
 
