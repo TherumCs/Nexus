@@ -19,6 +19,11 @@ function nexus_render_keys_tab( string $tab_id, array $tab ): void {
 		__( 'API keys vault', 'nexus' ),
 		__( "Every credential Nexus is holding. Secrets are masked; click a connector to jump to its card. Rotate via the provider's dashboard.", 'nexus' )
 	);
+	?>
+	<div style="margin-bottom:14px;display:flex;justify-content:flex-end">
+		<button type="button" class="th-button" data-nexus-health-sweep><?php esc_html_e( 'Run health check now →', 'nexus' ); ?></button>
+	</div>
+	<?php
 
 	$registry  = nexus_connector_registry();
 	$installed = 0;
@@ -53,6 +58,9 @@ function nexus_render_keys_tab( string $tab_id, array $tab ): void {
 			'oauth'     => $is_oauth,
 			'fieldset'  => $primary_field,
 			'docs'      => $c['docs'] ?? '',
+			'health_ts'  => (int) ( $saved['last_health_check'] ?? 0 ),
+			'health_ok'  => isset( $saved['last_health_ok'] ) ? (bool) $saved['last_health_ok'] : null,
+			'health_msg' => (string) ( $saved['last_health_msg'] ?? '' ),
 		];
 		$validated++;  // currently every is_configured connector counts as "stored" — live validation isn't tracked yet
 	}
@@ -112,6 +120,11 @@ function nexus_render_keys_tab( string $tab_id, array $tab ): void {
 				<td><span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--tx3)">••••••••</span></td>
 				<td style="font-size:12px;color:<?php echo $is_old ? 'var(--wrn)' : 'var(--tx2)'; ?>">
 					<?php echo $r['updated'] ? esc_html( human_time_diff( $r['updated'] ) . ' ago' ) : '—'; ?>
+					<?php if ( $r['health_ts'] && $r['health_ok'] === false ): ?>
+						<div style="font-size:10px;color:var(--err);margin-top:2px" title="<?php echo esc_attr( $r['health_msg'] ); ?>">✗ failed health check <?php echo esc_html( human_time_diff( $r['health_ts'] ) ); ?> ago</div>
+					<?php elseif ( $r['health_ts'] && $r['health_ok'] === true ): ?>
+						<div style="font-size:10px;color:var(--ok);margin-top:2px">✓ healthy</div>
+					<?php endif; ?>
 				</td>
 				<td class="nexus-update-table-actions">
 					<a href="<?php echo esc_url( $jump ); ?>" class="th-button" style="font-size:11px;padding:4px 10px"><?php esc_html_e( 'Open', 'nexus' ); ?></a>

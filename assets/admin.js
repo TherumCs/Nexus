@@ -172,6 +172,55 @@
 	// id/secret saved yet), we open the form and surface the OAuth
 	// section so the user can paste their app credentials first.
 
+	// Replay an inbound webhook
+	document.addEventListener('click', function(e) {
+		var replay = e.target.closest('[data-nexus-webhook-replay]');
+		if (replay) {
+			e.preventDefault();
+			var id = replay.getAttribute('data-nexus-webhook-replay');
+			if (!confirm('Replay this webhook event? Downstream listeners will be fired again with the original payload.')) return;
+			replay.disabled = true;
+			replay.dataset.orig = replay.textContent;
+			replay.textContent = '…';
+			var fd = new FormData();
+			fd.append('action', 'nexus_webhook_replay');
+			fd.append('nonce', NONCE);
+			fd.append('id', id);
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					replay.disabled = false;
+					replay.textContent = replay.dataset.orig || 'Replay';
+					if (j && j.success) { replay.textContent = '✓'; setTimeout(function(){ location.reload(); }, 600); }
+					else alert((j && j.data && j.data.message) || 'Replay failed.');
+				})
+				.catch(function(){ replay.disabled = false; replay.textContent = replay.dataset.orig || 'Replay'; alert('Network error.'); });
+			return;
+		}
+
+		var sweep = e.target.closest('[data-nexus-health-sweep]');
+		if (sweep) {
+			e.preventDefault();
+			if (!confirm('Run the credential health check on every configured connector now? This validates each one against its provider.')) return;
+			sweep.disabled = true;
+			var orig = sweep.textContent;
+			sweep.textContent = 'Sweeping…';
+			var fd = new FormData();
+			fd.append('action', 'nexus_health_check_now');
+			fd.append('nonce', NONCE);
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					sweep.disabled = false;
+					sweep.textContent = orig;
+					alert((j && j.data && j.data.message) || 'Done.');
+					location.reload();
+				})
+				.catch(function(){ sweep.disabled = false; sweep.textContent = orig; alert('Network error.'); });
+			return;
+		}
+	});
+
 	document.addEventListener('click', function(e) {
 		var oauthBtn = e.target.closest('[data-nexus-oauth-start]');
 		if (oauthBtn) {

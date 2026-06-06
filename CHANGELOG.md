@@ -1,5 +1,40 @@
 # Nexus by Therum — Changelog
 
+## [1.9.0] — 2026-06-04
+
+Finishing pass — everything that was queued lands here.
+
+### Added — validators for ~50 more connectors (coverage now 76 / 85)
+**CMS:** Drupal, Ghost, Webflow, Contentful, Strapi, Sanity, Storyblok, HubSpot CMS.
+**Ecommerce:** Amazon SP-API, Etsy, Square, BigCommerce, Magento, Lemon Squeezy, EDD.
+**APIs (email / SMS / search):** Mailgun, Postmark, Brevo, Algolia.
+**AI:** Google AI, xAI, Mistral, DeepSeek, Perplexity, Cohere, Groq, ElevenLabs, Hugging Face, Ollama, Together AI, Replicate, Stability AI, AssemblyAI, OpenRouter, Pinecone.
+**Payment gateways:** Plaid, Braintree, Adyen, Mollie, Authorize.Net, Razorpay, Coinbase Commerce, Klarna, Affirm, Afterpay, Sezzle, Zip, AnyPay, NOWPayments, BTCPay Server, Cash App Pay.
+**Apps:** Dropbox, Google Drive, Trello, Zapier (paste-only — no auth), Discord (Bot), Flow Desk (no public API, accepts without validation).
+**Bridge / no-API:** Pod Partner.
+
+Validator pattern is now codified via `_nv_get` / `_nv_post` / `_nv_ok` / `_nv_fail` helpers so adding a 77th is a 5-line copy of any of the above.
+
+### Added — daily background credential health check
+- **`nexus_health_check_all_connectors()`** re-runs validation on every configured connector. Failures land in the audit log + flag the connector's saved state (`last_health_check` / `last_health_ok` / `last_health_msg`).
+- **Vault tab surfaces health status** next to each row — green "✓ healthy" or red "✗ failed health check Xh ago" with the provider's error in a tooltip.
+- **"Run health check now" button** on the vault tab for on-demand sweeps.
+- **AJAX endpoint** `nexus_health_check_now` fires the sweep synchronously.
+- **Scheduled job** fires once a day via `nexus_health_check_all` action (Action Scheduler when available, wp_cron fallback).
+
+### Added — webhook replay
+- **Replay button** on each row in the Webhooks log. Click → re-fires `nexus_webhook_received` with the stored payload + logs the replay as a new row tagged `replay · <original event>`.
+- **AJAX endpoint** `nexus_webhook_replay`.
+
+### Added — hosted-OAuth token refresh through the proxy
+- `nexus_oauth_refresh()` now checks hosted mode. If `NEXUS_OAUTH_PROXY_URL` is defined, refresh requests go to `<proxy>/v1/refresh/<connector>?site=&refresh_token=&sig=<HMAC>` — proxy holds the app secret and signs the response. Falls back to BYOA refresh otherwise.
+- Closes the loop on the hosted OAuth story shipped in 1.6.1: full lifecycle (initial sign-in → token refresh → re-validation) all routes through the proxy when configured.
+
+### Notes
+- Validator coverage: **76 of 85 connectors** have live validators. The 9 unvalidated are: bridge-only entries (PODpluser, Tapstitch), the generic Custom API connector, and connectors without a documented auth-check endpoint (Flow Desk, Pod Partner). Each of these returns `unvalidated: true` honestly instead of pretending.
+- Replay reuses the original payload verbatim, so receivers must be idempotent. The replay row is marked in the log so it's distinguishable from a fresh inbound.
+- Health check default cadence is daily; tune with a filter on `nexus_health_check_interval` if needed (future tunable).
+
 ## [1.8.0] — 2026-06-04
 
 Massive turn — finishes the four Manage tabs that have been advertised in the sidebar (with stub data) since v1.0, lands real inbound webhook receivers with per-provider signature verification, adds an audit log + background job queue, and brings the live-validator coverage from 5 connectors up to 22.

@@ -857,6 +857,28 @@ function nexus_oauth_refresh( string $connector_id ) {
 	$saved = nexus_get_connector( $connector_id );
 	$conn  = $saved['config'] ?? [];
 
+	// Hosted-mode refresh — proxy holds the app secret, signs the request.
+	if ( nexus_oauth_hosted_mode() ) {
+		$refresh_tok = (string) ( $conn['oauth_refresh_token'] ?? '' );
+		if ( ! $refresh_tok ) return new WP_Error( 'nexus_oauth_no_refresh', 'No refresh_token on file.' );
+
+		$site = wp_parse_url( home_url(), PHP_URL_SCHEME ) . '://' . wp_parse_url( home_url(), PHP_URL_HOST );
+		$sig  = rtrim( strtr( base64_encode( hash_hmac( 'sha256', $site . "\n" . $refresh_tok, nexus_oauth_proxy_secret(), true ) ), '+/', '-_' ), '=' );
+		$url  = nexus_oauth_proxy_url() . '/v1/refresh/' . sanitize_key( $connector_id )
+				. '?site=' . rawurlencode( $site )
+				. '&refresh_token=' . rawurlencode( $refresh_tok )
+				. '&sig=' . rawurlencode( $sig );
+
+		$res = wp_remote_get( $url, [ 'timeout' => NEXUS_OAUTH_REQUEST_TIMEOUT ] );
+		if ( is_wp_error( $res ) ) return $res;
+		$body = json_decode( wp_remote_retrieve_body( $res ), true );
+		if ( empty( $body['payload'] ) ) return new WP_Error( 'nexus_oauth_refresh_failed', 'Proxy refresh returned no payload.' );
+		$decoded = nexus_oauth_verify_proxy_payload( $body['payload'] );
+		if ( ! $decoded || empty( $decoded['tokens']['access_token'] ) ) return new WP_Error( 'nexus_oauth_refresh_failed', 'Proxy payload did not verify or had no access_token.' );
+		nexus_oauth_persist_tokens( $connector_id, $decoded['tokens'] );
+		return $decoded['tokens'];
+	}
+
 	$client_id     = (string) ( $conn['oauth_client_id']     ?? '' );
 	$client_secret = (string) ( $conn['oauth_client_secret'] ?? '' );
 	$refresh_tok   = (string) ( $conn['oauth_refresh_token'] ?? '' );

@@ -286,11 +286,12 @@ function nexus_render_webhooks_tab( string $tab_id, array $tab ): void {
 				<th><?php esc_html_e( 'Source', 'nexus' ); ?></th>
 				<th><?php esc_html_e( 'Event', 'nexus' ); ?></th>
 				<th><?php esc_html_e( 'Status', 'nexus' ); ?></th>
+				<th></th>
 			</tr>
 		</thead>
 		<tbody>
 			<?php if ( empty( $rows ) ): ?>
-				<tr><td colspan="4" style="padding:20px;color:var(--tx3);text-align:center">
+				<tr><td colspan="5" style="padding:20px;color:var(--tx3);text-align:center">
 					<?php esc_html_e( 'No webhook events yet. Point your providers at:', 'nexus' ); ?><br>
 					<code style="margin-top:6px;display:inline-block"><?php echo esc_html( rest_url( 'nexus/v1/webhook/<connector>' ) ); ?></code>
 				</td></tr>
@@ -308,12 +309,51 @@ function nexus_render_webhooks_tab( string $tab_id, array $tab ): void {
 						<span style="color:var(--err);font-weight:600;font-size:11px">✗ <?php echo (int) $row['response_code']; ?></span>
 					<?php endif; ?>
 				</td>
+				<td class="nexus-update-table-actions">
+					<button type="button" class="th-button" style="font-size:11px;padding:4px 9px" data-nexus-webhook-replay="<?php echo (int) $row['id']; ?>"><?php esc_html_e( 'Replay', 'nexus' ); ?></button>
+				</td>
 			</tr>
 			<?php endforeach; endif; ?>
 		</tbody>
 	</table>
 	<?php
 }
+
+
+// ─── Replay ──────────────────────────────────────────────────────────────
+//
+// Re-fires the nexus_webhook_received action with the stored payload.
+// Useful when downstream processing failed the first time and the
+// failure has been fixed. Replays are themselves logged as new rows
+// with the same connector/event but a "replay" tag.
+
+add_action( 'wp_ajax_nexus_webhook_replay', function() {
+	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( [ 'message' => 'forbidden' ], 403 );
+	check_ajax_referer( 'nexus_connector', 'nonce' );
+	nexus_webhook_ensure_table();
+
+	$id = (int) ( $_POST['id'] ?? 0 );
+	if ( ! $id ) wp_send_json_error( [ 'message' => 'Missing id.' ] );
+	global $wpdb;
+	$row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM " . nexus_webhook_table() . " WHERE id = %d", $id ), ARRAY_A );
+	if ( ! $row ) wp_send_json_error( [ 'message' => 'Webhook not found.' ] );
+
+	$json = json_decode( (string) $row['payload'], true );
+	do_action( 'nexus_webhook_received', $row['connector'], $row['event'] ?: '', $json, $row['payload'] );
+
+	// Log the replay so it's visible in the audit + webhook trail.
+	$wpdb->insert( nexus_webhook_table(), [
+		'ts'            => time(),
+		'connector'     => $row['connector'],
+		'event'         => 'replay · ' . substr( (string) $row['event'], 0, 88 ),
+		'verified'      => 1,
+		'response_code' => 200,
+		'payload'       => $row['payload'],
+	], [ '%d', '%s', '%s', '%d', '%d', '%s' ] );
+	if ( function_exists( 'nexus_audit_log' ) ) nexus_audit_log( 'webhook.replayed', $row['connector'] . ( $row['event'] ? ' · ' . $row['event'] : '' ) );
+
+	wp_send_json_success( [ 'message' => 'Replayed.' ] );
+} );
 
 
 // Background purge — once a day, drop old events.
