@@ -1,5 +1,20 @@
 # Nexus by Therum — Changelog
 
+## [1.7.0] — 2026-06-04
+
+### Added
+- **Version history with rollback.** Updates tab now lists the last 30 GitHub releases of `TherumCs/Nexus` with version, publish date, title, link to release notes, and an Install button. The currently-running version is highlighted. Click **Install** on any newer version to upgrade, or **Roll back** on any older version to downgrade. Same Plugin_Upgrader flow; works in either direction.
+- **Local backups (auto-snapshot before every install).** Before any install — from GitHub latest, GitHub-specific version, or uploaded zip — Nexus zips the current `nexus/` directory to `wp-content/uploads/nexus-backups/v<version>-<timestamp>.zip`. Keeps the 5 most recent backups, prunes older. Folder is .htaccess-protected from direct browsing.
+- **Restore from backup.** New "Local backups" section lists every snapshot with size + age, and a one-click Restore button. Restore is itself reversible — it snapshots the current state first, so you can undo a botched rollback.
+- **Manual snapshot button.** "＋ Take snapshot now" for the case "I want to muck around before something risky."
+- **New AJAX endpoints**: `nexus_update_install_version`, `nexus_update_restore_backup`, `nexus_update_delete_backup`, `nexus_update_create_backup`.
+- **New REST-adjacent helper** `nexus_fetch_releases()` — fetches the full release list with 6h transient cache; complements the existing `nexus_fetch_latest_release()`.
+
+### Notes
+- ZipArchive PHP extension is required for backup creation. If missing, the "Take snapshot" button surfaces a clear error and auto-snapshots are skipped (installs still proceed without a safety net — same as previous versions). Standard on every host that supports modern WP.
+- Backup files persist across plugin updates (they live in `uploads/`, not `plugins/`), so reinstalling Nexus does NOT wipe your rollback history.
+- Backup retention can be tuned via `NEXUS_UPDATE_BACKUP_KEEP_N` constant (default 5). The existing transient cache constants gained a friend: `NEXUS_UPDATE_CACHE_KEY_ALL` for the full-history cache.
+
 ## [1.6.1] — 2026-06-04
 
 ### Added

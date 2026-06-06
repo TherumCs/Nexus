@@ -322,3 +322,18 @@
 .nexus-oauth-fallback-note{
   margin:0;font-size:11px;color:var(--tx3);text-align:center;
 }
+
+/* === Updates: version history + backups tables ======================== */
+.nexus-update-history, .nexus-update-backups{margin-top:16px}
+.nexus-update-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+.nexus-update-table thead th{text-align:left;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--tx3);padding:8px 6px;border-bottom:1px solid var(--bd)}
+.nexus-update-table tbody td{padding:10px 6px;border-bottom:1px solid var(--bd);vertical-align:middle}
+.nexus-update-table tbody tr:last-child td{border-bottom:0}
+.nexus-update-table tr.is-installed{background:color-mix(in srgb,var(--ac) 4%,transparent)}
+.nexus-update-table code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:var(--sf2);padding:2px 6px;border-radius:4px;border:1px solid var(--bd)}
+.nexus-update-current{margin-left:6px;font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ac);background:color-mix(in srgb,var(--ac) 10%,transparent);padding:2px 7px;border-radius:99px}
+.nexus-update-pre{margin-left:6px;font-size:10px;font-weight:600;color:var(--wrn);background:color-mix(in srgb,var(--wrn) 10%,transparent);padding:2px 7px;border-radius:99px}
+.nexus-update-table-actions{text-align:right;white-space:nowrap}
+.nexus-update-table-actions .th-button{font-size:12px;padding:5px 10px;margin-left:6px}
+.nexus-update-link{font-size:11px;color:var(--tx3);text-decoration:none;margin-right:6px}
+.nexus-update-link:hover{color:var(--ac)}

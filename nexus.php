@@ -3,7 +3,7 @@
  * Plugin Name:       Nexus by Therum
  * Plugin URI:        https://therum.studio/plugins/nexus
  * Description:       Connect CMS platforms, ecommerce stores, and third-party APIs from a single admin surface. Tile-grid UI per category with per-connector config and saved credentials.
- * Version:           1.6.1
+ * Version:           1.7.0
  * Requires at least: 6.4
  * Requires PHP:      8.0
  * Author:            Therum Creative Studios
@@ -15,7 +15,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'NEXUS_VERSION', '1.6.1' );
+define( 'NEXUS_VERSION', '1.7.0' );
 define( 'NEXUS_FILE', __FILE__ );
 define( 'NEXUS_DIR', plugin_dir_path( __FILE__ ) );
 define( 'NEXUS_URL', plugin_dir_url( __FILE__ ) );

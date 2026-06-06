@@ -615,6 +615,96 @@
 			return;
 		}
 
+		// Install a specific version (rollback or roll-forward)
+		var installVer = e.target.closest('[data-nexus-update-install-version]');
+		if (installVer) {
+			e.preventDefault();
+			var tag = installVer.getAttribute('data-nexus-update-install-version');
+			if (!confirm('Install ' + tag + '?\n\nThis swaps the current Nexus install for ' + tag + '. A backup of the current state is taken automatically so you can roll back from "Local backups" if anything goes wrong.')) return;
+			installVer.disabled = true;
+			installVer.dataset.orig = installVer.textContent;
+			installVer.textContent = 'Installing…';
+			var fd = new FormData();
+			fd.append('action', 'nexus_update_install_version');
+			fd.append('nonce', NONCE);
+			fd.append('tag', tag);
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					installVer.disabled = false;
+					installVer.textContent = installVer.dataset.orig || 'Install';
+					if (j && j.success) { alert('✓ ' + (j.data.message || 'Installed.')); location.reload(); }
+					else { alert('✗ ' + ((j && j.data && j.data.message) || 'Install failed.')); }
+				})
+				.catch(function(){ installVer.disabled = false; installVer.textContent = installVer.dataset.orig || 'Install'; alert('Network error.'); });
+			return;
+		}
+
+		// Restore a local backup
+		var restoreBtn = e.target.closest('[data-nexus-backup-restore]');
+		if (restoreBtn) {
+			e.preventDefault();
+			var file = restoreBtn.getAttribute('data-nexus-backup-restore');
+			if (!confirm('Restore from ' + file + '?\n\nThis swaps the current Nexus install for whatever was running when this backup was taken. The current state is snapshotted first so this restore is itself reversible.')) return;
+			restoreBtn.disabled = true;
+			restoreBtn.dataset.orig = restoreBtn.textContent;
+			restoreBtn.textContent = 'Restoring…';
+			var fd = new FormData();
+			fd.append('action', 'nexus_update_restore_backup');
+			fd.append('nonce', NONCE);
+			fd.append('file', file);
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					restoreBtn.disabled = false;
+					restoreBtn.textContent = restoreBtn.dataset.orig || 'Restore';
+					if (j && j.success) { alert('✓ ' + (j.data.message || 'Restored.')); location.reload(); }
+					else { alert('✗ ' + ((j && j.data && j.data.message) || 'Restore failed.')); }
+				})
+				.catch(function(){ restoreBtn.disabled = false; restoreBtn.textContent = restoreBtn.dataset.orig || 'Restore'; alert('Network error.'); });
+			return;
+		}
+
+		// Delete a local backup
+		var deleteBtn = e.target.closest('[data-nexus-backup-delete]');
+		if (deleteBtn) {
+			e.preventDefault();
+			var file = deleteBtn.getAttribute('data-nexus-backup-delete');
+			if (!confirm('Delete backup ' + file + '? This cannot be undone.')) return;
+			var fd = new FormData();
+			fd.append('action', 'nexus_update_delete_backup');
+			fd.append('nonce', NONCE);
+			fd.append('file', file);
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					if (j && j.success) location.reload();
+					else alert('✗ ' + ((j && j.data && j.data.message) || 'Delete failed.'));
+				});
+			return;
+		}
+
+		// Take a manual snapshot of the current install
+		var snapshotBtn = e.target.closest('[data-nexus-backup-create]');
+		if (snapshotBtn) {
+			e.preventDefault();
+			snapshotBtn.disabled = true;
+			var orig = snapshotBtn.textContent;
+			snapshotBtn.textContent = 'Snapshotting…';
+			var fd = new FormData();
+			fd.append('action', 'nexus_update_create_backup');
+			fd.append('nonce', NONCE);
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					snapshotBtn.disabled = false;
+					snapshotBtn.textContent = orig;
+					if (j && j.success) location.reload();
+					else alert('✗ ' + ((j && j.data && j.data.message) || 'Snapshot failed.'));
+				});
+			return;
+		}
+
 		var install = e.target.closest('[data-nexus-update-github]');
 		if (install) {
 			e.preventDefault();
