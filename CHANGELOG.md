@@ -1,5 +1,34 @@
 # Nexus by Therum — Changelog
 
+## [1.9.1] — 2026-06-04
+
+Three operational hardenings on top of 1.9.0. No new connectors, no new tabs — security + UX polish only.
+
+### Added — AES-256-GCM credential encryption at rest
+- **`includes/crypto.php`** — encrypts every password-typed field + OAuth tokens (access_token / refresh_token / client_id / client_secret) with AES-256-GCM keyed on `SECURE_AUTH_KEY` via HMAC derivation. Per-install unique cipher key, no extra config required.
+- **Transparent decryption** on read — `nexus_get_connector()` decrypts in-place; consumers never see ciphertext.
+- **Backward compatible** — envelope marker `nx1.` distinguishes encrypted from pre-1.9.1 plaintext. Existing plaintext values pass through on first read and get re-encrypted on next save. **No migration script required.** Drop in, edit any connector to trigger re-save, done.
+- **Plaintext-readable fields preserved** — only secret-shaped fields are encrypted. Store IDs, URLs, regions stay grep-able in the DB.
+- **Rotation impact documented** — rotating `SECURE_AUTH_KEY` invalidates every stored secret. Same trade-off WordPress makes for application passwords and auth cookies. After rotation, users disconnect + reconnect each connector to re-encrypt with the new key.
+
+### Added — webhook URL inline on cards
+- Connectors with built-in signature verifiers (Stripe, Shopify, Slack, GitHub, PayPal, Coinbase Commerce, AnyPay, Klarna) now show their dedicated webhook URL inline at the top of the credential form — click-to-copy. Saves the hunt through the API & Webhooks tab.
+- Per-connector URL with the connector ID baked in (e.g. `…/wp-json/nexus/v1/webhook/stripe`).
+
+### Changed — `uninstall.php` actually cleans up
+Was only deleting `nexus_connector_*` options. Now drops:
+- All `nexus_connector_*`, `nexus_feed_*`, `nexus_custom_connectors`, schema-version trackers, GitHub release caches
+- All `_transient_nexus_*` cached lookups
+- Custom tables `wp_nexus_audit_log` and `wp_nexus_webhook_log`
+- Backup zips in `wp-content/uploads/nexus-backups/` + the folder itself
+- Action Scheduler jobs in the `nexus` group + wp_cron fallback schedules
+
+Deactivation still leaves everything intact (non-destructive). Only "Delete plugin" triggers the cleanup.
+
+### Notes
+- Skipped Action Scheduler bundling (would add ~3 MB of vendor files). For high-volume sites without WooCommerce installed, the standalone Action Scheduler plugin from wp.org delivers the same benefit with zero code change.
+- Encryption applies on next save. Already-saved connectors stay plaintext in the DB until they're re-saved. To force re-encrypt the whole catalog at once: open each card → Save (form posts back the masked bullets which restore from prior, then re-encrypt). Or just hit Disconnect + Connect.
+
 ## [1.9.0] — 2026-06-04
 
 Finishing pass — everything that was queued lands here.

@@ -702,6 +702,30 @@ function nexus_render_conn_cards( array $connectors ): void {
 
 		<div class="th-conn-form" data-conn-form hidden>
 			<?php if ( $has_oauth ) nexus_render_oauth_app_fields( $connector ); ?>
+
+			<?php
+				// Show the Nexus-hosted webhook URL inline for connectors that
+				// have a built-in signature verifier — saves the user from
+				// hunting through the API & Webhooks tab. Click-to-copy.
+				$webhook_providers = [ 'stripe', 'shopify', 'slack', 'github', 'paypal', 'coinbase-commerce', 'anypay', 'klarna' ];
+				if ( in_array( $id, $webhook_providers, true ) && function_exists( 'nexus_webhook_url' ) ):
+					$webhook_url = nexus_webhook_url( $id );
+			?>
+				<div class="nexus-webhook-hint">
+					<div class="nexus-webhook-hint-head">
+						<strong>↘ <?php esc_html_e( 'Webhook URL', 'nexus' ); ?></strong>
+						<span><?php
+							printf(
+								/* translators: %s = provider name (e.g. Stripe) */
+								esc_html__( 'Register this with %s for inbound events. Signature is auto-verified.', 'nexus' ),
+								esc_html( $connector['name'] )
+							);
+						?></span>
+					</div>
+					<input type="text" readonly value="<?php echo esc_attr( $webhook_url ); ?>" onclick="this.select()">
+				</div>
+			<?php endif; ?>
+
 			<?php foreach ( $connector['fields'] as $field ):
 				$val = $config[ $field['key'] ] ?? '';
 			?>

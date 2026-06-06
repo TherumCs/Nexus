@@ -337,3 +337,19 @@
 .nexus-update-table-actions .th-button{font-size:12px;padding:5px 10px;margin-left:6px}
 .nexus-update-link{font-size:11px;color:var(--tx3);text-decoration:none;margin-right:6px}
 .nexus-update-link:hover{color:var(--ac)}
+
+/* === Inline webhook URL hint on connector cards ======================= */
+.nexus-webhook-hint{
+  background:color-mix(in srgb,var(--wrn) 7%,transparent);
+  border:1px solid color-mix(in srgb,var(--wrn) 25%,transparent);
+  border-radius:8px;padding:10px 12px;margin-bottom:14px;
+  display:flex;flex-direction:column;gap:6px;
+}
+.nexus-webhook-hint-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.nexus-webhook-hint-head strong{font-size:12px;color:var(--wrn);font-weight:700}
+.nexus-webhook-hint-head span{font-size:11px;color:var(--tx2);line-height:1.5}
+.nexus-webhook-hint input{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+  padding:6px 9px;background:var(--sf);border:1px solid var(--bd);border-radius:6px;
+  color:var(--tx);width:100%;
+}

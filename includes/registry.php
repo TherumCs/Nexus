@@ -1149,10 +1149,22 @@ function nexus_get_connector( string $id ): array {
 	$raw = get_option( 'nexus_connector_' . sanitize_key( $id ), '' );
 	if ( ! $raw ) return [];
 	$data = json_decode( $raw, true );
-	return is_array( $data ) ? $data : [];
+	if ( ! is_array( $data ) ) return [];
+	// Decrypt any envelope-wrapped secrets transparently. Pre-1.9.1
+	// plaintext passes through unchanged via nexus_crypto_is_envelope check.
+	if ( function_exists( 'nexus_crypto_decrypt_config' ) && ! empty( $data['config'] ) && is_array( $data['config'] ) ) {
+		$data['config'] = nexus_crypto_decrypt_config( $data['config'] );
+	}
+	return $data;
 }
 
 function nexus_save_connector( string $id, array $data ): void {
+	// Encrypt every password-typed field + OAuth tokens before they hit
+	// the database. Plaintext fields (URLs, store IDs, regions) stay
+	// readable so DB admins can still inspect them.
+	if ( function_exists( 'nexus_crypto_encrypt_config' ) && ! empty( $data['config'] ) && is_array( $data['config'] ) ) {
+		$data['config'] = nexus_crypto_encrypt_config( $id, $data['config'] );
+	}
 	update_option( 'nexus_connector_' . sanitize_key( $id ), wp_json_encode( $data ), false );
 }
 
