@@ -117,6 +117,55 @@
 			return;
 		}
 
+		// Validate a feed — runs the pipeline server-side, surfaces
+		// counts + list of products missing required fields.
+		var feedValidate = e.target.closest('[data-feed-validate]');
+		if (feedValidate) {
+			e.preventDefault();
+			var ch = feedValidate.getAttribute('data-feed-validate');
+			var card = feedValidate.closest('[data-feed-channel]');
+			var result = card && card.querySelector('[data-feed-validate-result]');
+			feedValidate.disabled = true;
+			feedValidate.dataset.orig = feedValidate.textContent;
+			feedValidate.textContent = 'Validating…';
+			if (result) result.textContent = '';
+			var fd = new FormData();
+			fd.append('action', 'nexus_feed_validate');
+			fd.append('nonce', NONCE);
+			fd.append('channel', ch);
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					feedValidate.disabled = false;
+					feedValidate.textContent = feedValidate.dataset.orig || 'Validate';
+					if (!result) return;
+					if (!j || !j.success) {
+						result.style.color = 'var(--err)';
+						result.textContent = '✗ ' + ((j && j.data && j.data.message) || 'Validation failed');
+						return;
+					}
+					var d = j.data;
+					var html = '<strong>' + d.valid + ' / ' + d.total + ' items would be accepted by ' + d.channel_name + '</strong>';
+					result.style.color = d.invalid === 0 ? 'var(--ok)' : 'var(--wrn)';
+					if (d.invalid > 0) {
+						html += '<br>' + d.invalid + ' would be rejected for missing fields:';
+						html += '<div style="margin-top:6px;max-height:180px;overflow-y:auto;font-size:11px;background:var(--sf2);padding:6px;border-radius:6px;color:var(--tx2)">';
+						d.failures.forEach(function(f) {
+							html += '<div style="padding:2px 0">• ' + (f.id || '?') + ' <em>' + (f.title || '') + '</em> — missing: ' + (f.missing||[]).join(', ') + '</div>';
+						});
+						if (d.invalid > d.failures.length) html += '<div style="opacity:.6">…and ' + (d.invalid - d.failures.length) + ' more</div>';
+						html += '</div>';
+					}
+					result.innerHTML = html;
+				})
+				.catch(function(){
+					feedValidate.disabled = false;
+					feedValidate.textContent = feedValidate.dataset.orig || 'Validate';
+					if (result) { result.style.color = 'var(--err)'; result.textContent = '✗ Network error.'; }
+				});
+			return;
+		}
+
 		var feedCopy = e.target.closest('[data-feed-copy]');
 		if (feedCopy) {
 			var url = feedCopy.getAttribute('data-copy-target') || '';

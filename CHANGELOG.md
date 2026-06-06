@@ -1,5 +1,46 @@
 # Nexus by Therum — Changelog
 
+## [2.1.0] — 2026-06-04
+
+Round 2 on the Channels (product feed) system. Five additions targeting the real pain — products getting rejected, no per-product control, expensive regeneration, missing channels.
+
+### Added — per-product overrides
+- **Nexus product feed meta box** on every WC product edit screen (sidebar, "default" priority). Override `brand`, `gtin`, `mpn`, `google_product_category`, `condition`, or set "exclude from all feeds" per product. Overrides win over every auto-detect chain in the normalizer.
+- **Storage:** individual `_nexus_feed_*` post-meta keys (single-row reads, no JSON blobs).
+- **Uninstall** cleans up `_nexus_feed_%` post-meta so a reinstall starts fresh.
+
+### Added — channel-level product filters
+Every channel now supports:
+- `featured_only` — ship only WC's featured-flagged products
+- `require_image` — drop items without a featured image (channels reject these anyway)
+- `min_price` — drop items under a floor (useful for sale-only catalogs, free-shipping minimums)
+- `exclude_categories` — comma-separated WC `product_cat` IDs to skip
+
+All apply BEFORE the renderer runs, so they don't bloat the validation output or the cached feed.
+
+### Added — pre-flight feed validation
+- **"Validate" button** on each channel card. Runs the full collection pipeline server-side, then checks every item against the channel's required-field list (id, title, description, link, image_link, price, availability, brand). Reports counts of valid / invalid items + lists the first 50 failures with which fields each is missing.
+- **Catches rejected listings BEFORE submitting to Google/Meta.** Surfaces what to fix.
+- **New AJAX endpoint** `nexus_feed_validate`.
+
+### Added — filesystem cache with auto-invalidation
+- **5-minute disk cache** on rendered feeds (`wp-content/uploads/nexus-feeds-cache/<channel>.cache`). REST serve checks cache first, regenerates on miss. Hit/miss surfaced via `X-Nexus-Cache: hit|miss` header.
+- **Auto-invalidates** on every `save_post_product`, product `delete_post`, `woocommerce_product_set_stock`, `woocommerce_variation_set_stock`. So a product update propagates to the next feed fetch within seconds — no stale data.
+- **Also invalidated** by the per-product meta box on save.
+- **Folder htaccess-protected** from direct browsing.
+- **Uninstall** cleans up the cache directory.
+
+### Added — two more channels
+- **Snapchat Catalog** (CSV) — Snapchat Ads dynamic product catalog, same schema family as Meta/Pinterest.
+- **Klaviyo Catalog** (CSV) — Klaviyo product catalog, powers product recommendations + abandoned-cart emails. High value for email marketing.
+
+Total channels: 5 → 7.
+
+### Notes
+- Per-product overrides apply to BOTH simple products and variations. For variations, the override is read off the parent product (variations don't have their own post-meta UI in WC).
+- Cache is per-channel, not per-token — if multiple channels share the same data shape, each still gets its own cache entry. Could be optimized in a future pass.
+- Validation is "what would the channel reject" — not "is everything optimal." A product can pass validation and still underperform if descriptions are weak, images low-res, etc.
+
 ## [2.0.0] — 2026-06-04
 
 Hardening pass against the team coding standards. No new features — every change is performance, correctness, or security on existing code. Major version bump because three observable behaviors changed (pagination cuts default page size, HTTPS now enforced on secret-bearing URL fields, webhook receiver rate-limits at 240/min/connector).

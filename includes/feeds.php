@@ -24,6 +24,148 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  PER-PRODUCT OVERRIDES (Product → Nexus feed panel)
+//
+//  Adds a meta box to the WooCommerce product edit screen so a single
+//  product can override any feed-relevant field: brand, GTIN, MPN,
+//  google_product_category, condition, or "exclude from feeds entirely."
+//  Saved as individual `_nexus_feed_*` post-meta keys. The normalizer
+//  reads them first before falling back to global config.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const NEXUS_FEED_OVERRIDE_KEYS = [
+	'brand'                   => '_nexus_feed_brand',
+	'gtin'                    => '_nexus_feed_gtin',
+	'mpn'                     => '_nexus_feed_mpn',
+	'google_product_category' => '_nexus_feed_google_category',
+	'condition'               => '_nexus_feed_condition',
+	'excluded'                => '_nexus_feed_exclude',
+];
+
+add_action( 'add_meta_boxes', function() {
+	if ( ! class_exists( 'WooCommerce' ) ) return;
+	add_meta_box(
+		'nexus_feed_overrides',
+		__( 'Nexus product feed', 'nexus' ),
+		'nexus_feed_render_product_meta_box',
+		'product',
+		'side',
+		'default'
+	);
+} );
+
+function nexus_feed_render_product_meta_box( $post ): void {
+	$brand     = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['brand'], true );
+	$gtin      = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['gtin'], true );
+	$mpn       = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['mpn'], true );
+	$cat       = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['google_product_category'], true );
+	$condition = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['condition'], true );
+	$excluded  = get_post_meta( $post->ID, NEXUS_FEED_OVERRIDE_KEYS['excluded'], true ) === '1';
+	wp_nonce_field( 'nexus_feed_meta', 'nexus_feed_nonce' );
+	?>
+	<p style="font-size:11px;color:#666;margin:0 0 10px">Overrides the global feed defaults for this product. Leave blank to use channel-level fallbacks.</p>
+	<p>
+		<label style="display:flex;align-items:center;gap:6px;font-weight:600">
+			<input type="checkbox" name="nexus_feed_exclude" value="1" <?php checked( $excluded ); ?>>
+			Exclude this product from all feeds
+		</label>
+	</p>
+	<p><label>Brand<br><input type="text" name="nexus_feed_brand" value="<?php echo esc_attr( $brand ); ?>" style="width:100%" placeholder="Override default"></label></p>
+	<p><label>GTIN<br><input type="text" name="nexus_feed_gtin" value="<?php echo esc_attr( $gtin ); ?>" style="width:100%" placeholder="14-digit code (UPC/EAN/ISBN)"></label></p>
+	<p><label>MPN<br><input type="text" name="nexus_feed_mpn" value="<?php echo esc_attr( $mpn ); ?>" style="width:100%" placeholder="Manufacturer part number"></label></p>
+	<p><label>Google product category<br><input type="text" name="nexus_feed_google_category" value="<?php echo esc_attr( $cat ); ?>" style="width:100%" placeholder="e.g. Apparel > Tops > T-Shirts"></label></p>
+	<p>
+		<label>Condition<br>
+			<select name="nexus_feed_condition" style="width:100%">
+				<option value="" <?php selected( $condition, '' ); ?>>— default —</option>
+				<option value="new" <?php selected( $condition, 'new' ); ?>>New</option>
+				<option value="used" <?php selected( $condition, 'used' ); ?>>Used</option>
+				<option value="refurbished" <?php selected( $condition, 'refurbished' ); ?>>Refurbished</option>
+			</select>
+		</label>
+	</p>
+	<?php
+}
+
+add_action( 'save_post_product', function( $post_id ) {
+	if ( ! isset( $_POST['nexus_feed_nonce'] ) || ! wp_verify_nonce( $_POST['nexus_feed_nonce'], 'nexus_feed_meta' ) ) return;
+	if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
+	if ( ! current_user_can( 'edit_post', $post_id ) ) return;
+
+	$map = [
+		'brand'                    => 'nexus_feed_brand',
+		'gtin'                     => 'nexus_feed_gtin',
+		'mpn'                      => 'nexus_feed_mpn',
+		'google_product_category'  => 'nexus_feed_google_category',
+		'condition'                => 'nexus_feed_condition',
+	];
+	foreach ( $map as $field => $post_key ) {
+		$v = isset( $_POST[ $post_key ] ) ? sanitize_text_field( wp_unslash( $_POST[ $post_key ] ) ) : '';
+		if ( $v === '' ) {
+			delete_post_meta( $post_id, NEXUS_FEED_OVERRIDE_KEYS[ $field ] );
+		} else {
+			update_post_meta( $post_id, NEXUS_FEED_OVERRIDE_KEYS[ $field ], $v );
+		}
+	}
+	$excluded = isset( $_POST['nexus_feed_exclude'] ) && $_POST['nexus_feed_exclude'] === '1';
+	if ( $excluded ) {
+		update_post_meta( $post_id, NEXUS_FEED_OVERRIDE_KEYS['excluded'], '1' );
+	} else {
+		delete_post_meta( $post_id, NEXUS_FEED_OVERRIDE_KEYS['excluded'] );
+	}
+
+	// Bust any cached feed so the next fetch reflects the change.
+	nexus_feed_invalidate_cache();
+}, 10, 1 );
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  CACHE — filesystem-backed, auto-invalidated on product change
+// ═════════════════════════════════════════════════════════════════════════════
+
+const NEXUS_FEED_CACHE_TTL = 300;  // 5 minutes — channels fetch on schedule, not realtime
+
+function nexus_feed_cache_dir(): string {
+	$uploads = wp_upload_dir();
+	$dir     = trailingslashit( $uploads['basedir'] ) . 'nexus-feeds-cache';
+	if ( ! is_dir( $dir ) ) wp_mkdir_p( $dir );
+	if ( ! file_exists( $dir . '/.htaccess' ) ) {
+		@file_put_contents( $dir . '/.htaccess', "Order deny,allow\nDeny from all\n" );
+	}
+	return $dir;
+}
+
+function nexus_feed_cache_path( string $channel_id ): string {
+	return nexus_feed_cache_dir() . '/' . sanitize_file_name( $channel_id ) . '.cache';
+}
+
+function nexus_feed_cache_get( string $channel_id ): ?string {
+	$path = nexus_feed_cache_path( $channel_id );
+	if ( ! is_file( $path ) ) return null;
+	if ( ( time() - filemtime( $path ) ) > NEXUS_FEED_CACHE_TTL ) return null;
+	$content = file_get_contents( $path );
+	return $content === false ? null : $content;
+}
+
+function nexus_feed_cache_put( string $channel_id, string $content ): void {
+	@file_put_contents( nexus_feed_cache_path( $channel_id ), $content );
+}
+
+function nexus_feed_invalidate_cache(): void {
+	$dir = nexus_feed_cache_dir();
+	foreach ( (array) glob( $dir . '/*.cache' ) as $f ) {
+		if ( is_file( $f ) ) @unlink( $f );
+	}
+}
+
+// Auto-invalidate on any product write (publish, update, delete, stock change).
+add_action( 'save_post_product', 'nexus_feed_invalidate_cache' );
+add_action( 'delete_post',       function( $id ) { if ( get_post_type( $id ) === 'product' ) nexus_feed_invalidate_cache(); } );
+add_action( 'woocommerce_product_set_stock', 'nexus_feed_invalidate_cache' );
+add_action( 'woocommerce_variation_set_stock', 'nexus_feed_invalidate_cache' );
+
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  CHANNEL REGISTRY
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -36,7 +178,15 @@ function nexus_feed_channels(): array {
 		[ 'key' => 'condition',            'label' => 'Default Condition',     'type' => 'select',
 			'options' => [ 'new' => 'New', 'used' => 'Used', 'refurbished' => 'Refurbished' ],
 			'required' => false ],
-		[ 'key' => 'include_out_of_stock', 'label' => 'Include out-of-stock products', 'type' => 'checkbox', 'placeholder' => '',                  'required' => false ],
+
+		// ── Inclusion / exclusion filters ────────────────────────────────
+		[ 'key' => 'include_out_of_stock', 'label' => 'Include out-of-stock products', 'type' => 'checkbox', 'placeholder' => '', 'required' => false ],
+		[ 'key' => 'featured_only',        'label' => 'Featured products only',         'type' => 'checkbox', 'placeholder' => 'Only ship products with WC\'s featured flag set', 'required' => false ],
+		[ 'key' => 'require_image',        'label' => 'Skip products without an image', 'type' => 'checkbox', 'placeholder' => 'Most channels reject imageless rows anyway', 'required' => false ],
+		[ 'key' => 'min_price',            'label' => 'Minimum price',                   'type' => 'text',     'placeholder' => 'e.g. 5.00 — products under this are dropped', 'required' => false ],
+		[ 'key' => 'exclude_categories',   'label' => 'Exclude category IDs',            'type' => 'text',     'placeholder' => 'Comma-separated WC product_cat IDs',           'required' => false ],
+
+		// ── Per-product field auto-detect overrides ──────────────────────
 		[ 'key' => 'brand_field',          'label' => 'Per-product brand custom field key', 'type' => 'text', 'placeholder' => 'e.g. _brand — leave blank for the fallback', 'required' => false ],
 		[ 'key' => 'gtin_field',           'label' => 'Per-product GTIN custom field key',  'type' => 'text', 'placeholder' => 'e.g. _gtin',         'required' => false ],
 		[ 'key' => 'mpn_field',            'label' => 'Per-product MPN custom field key',   'type' => 'text', 'placeholder' => 'e.g. _mpn',          'required' => false ],
@@ -99,6 +249,26 @@ function nexus_feed_channels(): array {
 			'fields' => array_merge( $shared_fields, [
 				[ 'key' => 'google_product_category', 'label' => 'Default Google Product Category', 'type' => 'text', 'placeholder' => 'Bing accepts Google taxonomy', 'required' => false ],
 			] ),
+		],
+		'snapchat-catalog' => [
+			'id'     => 'snapchat-catalog',
+			'name'   => 'Snapchat Catalog',
+			'color'  => '#fffc00',
+			'initial'=> 'Sc',
+			'desc'   => 'Snapchat Ads dynamic product catalog. CSV — same schema family as Meta/Pinterest.',
+			'format' => 'csv',
+			'docs'   => 'https://businesshelp.snapchat.com/s/article/catalogs-overview',
+			'fields' => $shared_fields,
+		],
+		'klaviyo-catalog' => [
+			'id'     => 'klaviyo-catalog',
+			'name'   => 'Klaviyo Catalog',
+			'color'  => '#000000',
+			'initial'=> 'Kl',
+			'desc'   => 'Klaviyo product catalog feed — powers product recommendations + abandoned cart emails.',
+			'format' => 'csv',
+			'docs'   => 'https://help.klaviyo.com/hc/en-us/articles/115005268747',
+			'fields' => $shared_fields,
 		],
 	];
 
@@ -181,17 +351,37 @@ function nexus_feed_serve( WP_REST_Request $req ) {
 
 	$channel = $channels[ $channel_id ];
 	$config  = $row['config'] ?? [];
-	$items   = nexus_feed_collect_products( $config );
 
-	// Render in the channel's native format. Bypass REST serialization —
-	// we want raw XML/CSV with the right Content-Type, not a JSON envelope.
+	// Cache layer — feed body cached on disk for NEXUS_FEED_CACHE_TTL
+	// (5 min default). Auto-invalidated on any WC product save/delete
+	// or stock change via the hooks at the top of this file.
+	$cached = nexus_feed_cache_get( $channel_id );
+
 	if ( $channel['format'] === 'xml' ) {
 		header( 'Content-Type: application/xml; charset=utf-8' );
-		echo nexus_feed_render_google_xml( $items, $config );
+		if ( $cached !== null ) {
+			header( 'X-Nexus-Cache: hit' );
+			echo $cached;
+		} else {
+			header( 'X-Nexus-Cache: miss' );
+			$items  = nexus_feed_collect_products( $config );
+			$body   = nexus_feed_render_google_xml( $items, $config );
+			nexus_feed_cache_put( $channel_id, $body );
+			echo $body;
+		}
 	} else {
 		header( 'Content-Type: text/csv; charset=utf-8' );
 		header( 'Content-Disposition: inline; filename="nexus-' . $channel_id . '.csv"' );
-		echo nexus_feed_render_csv( $items, $channel_id, $config );
+		if ( $cached !== null ) {
+			header( 'X-Nexus-Cache: hit' );
+			echo $cached;
+		} else {
+			header( 'X-Nexus-Cache: miss' );
+			$items  = nexus_feed_collect_products( $config );
+			$body   = nexus_feed_render_csv( $items, $channel_id, $config );
+			nexus_feed_cache_put( $channel_id, $body );
+			echo $body;
+		}
 	}
 	exit;
 }
@@ -211,29 +401,60 @@ function nexus_feed_serve( WP_REST_Request $req ) {
  * (each variation is what marketplaces actually need).
  */
 function nexus_feed_collect_products( array $config ): array {
-	$include_oos = ! empty( $config['include_out_of_stock'] );
+	$include_oos    = ! empty( $config['include_out_of_stock'] );
+	$featured_only  = ! empty( $config['featured_only'] );
+	$require_image  = ! empty( $config['require_image'] );
+	$min_price      = (float) ( $config['min_price'] ?? 0 );
+	$exclude_cats   = nexus_feed_parse_id_list( (string) ( $config['exclude_categories'] ?? '' ) );
+
 	$args = [
 		'status' => 'publish',
 		'limit'  => -1,
 		'type'   => [ 'simple', 'variable' ],
 		'return' => 'objects',
 	];
-	if ( ! $include_oos ) $args['stock_status'] = 'instock';
+	if ( ! $include_oos )   $args['stock_status'] = 'instock';
+	if ( $featured_only )   $args['featured']     = true;
+	if ( $exclude_cats )    $args['category']     = []; // we filter manually below since 'exclude_category' isn't supported
 
 	$products = wc_get_products( $args );
 	$items    = [];
 
 	foreach ( $products as $product ) {
+		// Per-product opt-out via the meta box.
+		if ( get_post_meta( $product->get_id(), NEXUS_FEED_OVERRIDE_KEYS['excluded'], true ) === '1' ) continue;
+
+		// Category exclusion — manual since WC's category arg has no "NOT IN" form.
+		if ( $exclude_cats ) {
+			$product_cats = wp_get_post_terms( $product->get_id(), 'product_cat', [ 'fields' => 'ids' ] );
+			if ( is_array( $product_cats ) && array_intersect( $exclude_cats, $product_cats ) ) continue;
+		}
+
 		if ( $product->is_type( 'variable' ) ) {
 			foreach ( $product->get_available_variations( 'objects' ) as $var ) {
 				if ( ! $include_oos && ! $var->is_in_stock() ) continue;
-				$items[] = nexus_feed_normalize( $var, $product, $config );
+				if ( $min_price > 0 && (float) $var->get_price() < $min_price ) continue;
+				$norm = nexus_feed_normalize( $var, $product, $config );
+				if ( ! $norm ) continue;
+				if ( $require_image && empty( $norm['image_link'] ) ) continue;
+				$items[] = $norm;
 			}
 		} else {
-			$items[] = nexus_feed_normalize( $product, null, $config );
+			if ( $min_price > 0 && (float) $product->get_price() < $min_price ) continue;
+			$norm = nexus_feed_normalize( $product, null, $config );
+			if ( ! $norm ) continue;
+			if ( $require_image && empty( $norm['image_link'] ) ) continue;
+			$items[] = $norm;
 		}
 	}
 	return array_values( array_filter( $items ) );
+}
+
+/** Parse "12, 14,17" → [12, 14, 17]. */
+function nexus_feed_parse_id_list( string $s ): array {
+	if ( $s === '' ) return [];
+	$ids = array_filter( array_map( 'intval', preg_split( '/[,\s]+/', $s ) ) );
+	return array_values( array_unique( $ids ) );
 }
 
 /**
@@ -302,6 +523,17 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 		if ( $u && $u !== $image_url ) $additional_images[] = $u;
 	}
 
+	// Per-product overrides (from the Nexus product meta box) take
+	// precedence over every auto-detect chain below. The product editor
+	// is the one place where a human said "this product specifically
+	// needs X" — respect that without fallback.
+	$parent_or_self_id = $parent ? $parent->get_id() : $id;
+	$override_brand     = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['brand'], true );
+	$override_gtin      = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['gtin'], true );
+	$override_mpn       = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['mpn'], true );
+	$override_gcat      = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['google_product_category'], true );
+	$override_condition = (string) get_post_meta( $parent_or_self_id, NEXUS_FEED_OVERRIDE_KEYS['condition'], true );
+
 	// Brand — auto-detect chain. Tries every common storage location before
 	// the user-configured fallback, so a typical WC store doesn't need to
 	// touch brand at all (the bit that drove people crazy with CTX Feed).
@@ -316,8 +548,8 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 	//   7. Site name (always non-empty)
 	$brand_field = (string) ( $config['brand_field'] ?? '' );
 	$parent_id   = $parent ? $parent->get_id() : $id;
-	$brand = '';
-	if ( $brand_field ) {
+	$brand = $override_brand; // per-product override wins
+	if ( ! $brand && $brand_field ) {
 		$brand = (string) $product->get_meta( $brand_field );
 		if ( ! $brand && $parent ) $brand = (string) $parent->get_meta( $brand_field );
 	}
@@ -334,10 +566,11 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 
 	// GTIN auto-detect. WC 8.3+ ships a first-class GTIN field under the
 	// '_global_unique_id' meta key — that's the canonical one. Older
-	// installs use `_gtin`, `_ean`, `_upc`, or `_isbn`.
+	// installs use `_gtin`, `_ean`, `_upc`, or `_isbn`. Per-product
+	// override (from the meta box) wins over all auto-detect.
 	$gtin_field = (string) ( $config['gtin_field'] ?? '' );
-	$gtin = '';
-	if ( $gtin_field ) {
+	$gtin = $override_gtin;
+	if ( ! $gtin && $gtin_field ) {
 		$gtin = (string) $product->get_meta( $gtin_field );
 		if ( ! $gtin && $parent ) $gtin = (string) $parent->get_meta( $gtin_field );
 	}
@@ -348,9 +581,9 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 	}
 
 	// MPN auto-detect. Less standardized — try the common keys.
-	$mpn_field  = (string) ( $config['mpn_field']  ?? '' );
-	$mpn = '';
-	if ( $mpn_field ) {
+	$mpn_field = (string) ( $config['mpn_field'] ?? '' );
+	$mpn = $override_mpn;
+	if ( ! $mpn && $mpn_field ) {
 		$mpn = (string) $product->get_meta( $mpn_field );
 		if ( ! $mpn && $parent ) $mpn = (string) $parent->get_meta( $mpn_field );
 	}
@@ -436,11 +669,11 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 		// to the format each platform actually requires.
 		'availability' => $availability,    // 'in_stock' | 'out_of_stock'
 		'inventory'    => (int) $qty,       // Meta / IG — quantity_to_sell_on_facebook
-		'condition'    => (string) ( $config['condition'] ?? 'new' ),
+		'condition'    => $override_condition ?: (string) ( $config['condition'] ?? 'new' ),
 		'brand'        => $brand,
 		'gtin'         => $gtin,
 		'mpn'          => $mpn,
-		'google_product_category' => (string) ( $config['google_product_category'] ?? '' ),
+		'google_product_category' => $override_gcat ?: (string) ( $config['google_product_category'] ?? '' ),
 		'fb_product_category'     => (string) ( $config['fb_product_category']     ?? '' ),
 		'item_group_id'           => $parent ? (string) $parent->get_id() : '',
 		'color'        => $color,
@@ -692,6 +925,57 @@ add_action( 'wp_ajax_nexus_feed_save', function() {
 	] );
 } );
 
+/**
+ * Pre-flight validator. Runs the full collection pipeline + checks
+ * each item against the channel's required-field list. Returns
+ * counts + a sample of failures so the user can fix products before
+ * Google / Meta starts disapproving listings.
+ */
+add_action( 'wp_ajax_nexus_feed_validate', function() {
+	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'forbidden', 403 );
+	check_ajax_referer( 'nexus_connector', 'nonce' );
+
+	$id = sanitize_key( $_POST['channel'] ?? '' );
+	$channels = nexus_feed_channels();
+	if ( ! isset( $channels[ $id ] ) ) wp_send_json_error( [ 'message' => 'Unknown channel.' ] );
+	if ( ! class_exists( 'WooCommerce' ) ) wp_send_json_error( [ 'message' => 'WooCommerce is required.' ] );
+
+	$row    = nexus_feed_config( $id );
+	$config = $row['config'] ?? [];
+	$items  = nexus_feed_collect_products( $config );
+
+	// Required fields per channel — what gets rejected if missing.
+	$required = [
+		'id', 'title', 'description', 'link', 'image_link', 'price', 'availability', 'brand',
+	];
+	$failures = [];
+	$pass     = 0;
+	foreach ( $items as $i ) {
+		$missing = [];
+		foreach ( $required as $r ) {
+			if ( empty( $i[ $r ] ) ) $missing[] = $r;
+		}
+		if ( $missing ) {
+			$failures[] = [
+				'id'      => (string) ( $i['id'] ?? '?' ),
+				'title'   => (string) ( $i['title'] ?? '' ),
+				'missing' => $missing,
+			];
+		} else {
+			$pass++;
+		}
+	}
+
+	wp_send_json_success( [
+		'channel'      => $id,
+		'channel_name' => $channels[ $id ]['name'],
+		'total'        => count( $items ),
+		'valid'        => $pass,
+		'invalid'      => count( $failures ),
+		'failures'     => array_slice( $failures, 0, 50 ), // cap UI payload
+	] );
+} );
+
 add_action( 'wp_ajax_nexus_feed_delete', function() {
 	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'forbidden', 403 );
 	check_ajax_referer( 'nexus_connector', 'nonce' );
@@ -750,14 +1034,18 @@ function nexus_render_channels_tab( string $tab_id, array $tab ): void {
 						);
 					?></p>
 					<input type="text" readonly value="<?php echo esc_attr( $feed_url ); ?>" onclick="this.select()" data-feed-url-input>
-					<div style="display:flex;gap:8px;margin-top:4px">
+					<div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
 						<a href="<?php echo esc_url( $feed_url ); ?>" target="_blank" rel="noopener" class="th-button">
 							<?php esc_html_e( 'Preview feed →', 'nexus' ); ?>
 						</a>
 						<button type="button" class="th-button" data-feed-copy data-copy-target="<?php echo esc_attr( $feed_url ); ?>">
 							<?php esc_html_e( 'Copy URL', 'nexus' ); ?>
 						</button>
+						<button type="button" class="th-button" data-feed-validate="<?php echo esc_attr( $ch['id'] ); ?>">
+							<?php esc_html_e( 'Validate', 'nexus' ); ?>
+						</button>
 					</div>
+					<div data-feed-validate-result style="font-size:11px;color:var(--tx2);margin-top:6px"></div>
 				</div>
 			<?php endif; ?>
 

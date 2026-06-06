@@ -45,16 +45,22 @@ $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}nexus_webhook_log" );
 
 $uploads = wp_upload_dir();
 if ( ! empty( $uploads['basedir'] ) ) {
-	$backups_dir = trailingslashit( $uploads['basedir'] ) . 'nexus-backups';
-	if ( is_dir( $backups_dir ) ) {
-		// Recursive delete — careful, restricted to our subdir.
-		$files = glob( $backups_dir . '/*' ) ?: [];
-		foreach ( $files as $f ) {
-			if ( is_file( $f ) ) @unlink( $f );
+	foreach ( [ 'nexus-backups', 'nexus-feeds-cache' ] as $subdir ) {
+		$path = trailingslashit( $uploads['basedir'] ) . $subdir;
+		if ( is_dir( $path ) ) {
+			foreach ( (array) glob( $path . '/*' ) as $f ) {
+				if ( is_file( $f ) ) @unlink( $f );
+			}
+			@unlink( $path . '/.htaccess' );
+			@unlink( $path . '/index.php' );
+			@rmdir( $path );
 		}
-		@rmdir( $backups_dir );
 	}
 }
+
+// Also delete per-product feed override post-meta so leftover data
+// doesn't haunt a fresh reinstall.
+$wpdb->query( "DELETE FROM {$wpdb->postmeta} WHERE meta_key LIKE '_nexus_feed_%'" );
 
 // ─── 4. Scheduled background jobs ────────────────────────────────────────
 
