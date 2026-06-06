@@ -1,5 +1,42 @@
 # Nexus by Therum — Changelog
 
+## [1.8.0] — 2026-06-04
+
+Massive turn — finishes the four Manage tabs that have been advertised in the sidebar (with stub data) since v1.0, lands real inbound webhook receivers with per-provider signature verification, adds an audit log + background job queue, and brings the live-validator coverage from 5 connectors up to 22.
+
+### Added — finishing the Manage tabs (the sidebar stops lying)
+- **API keys vault** (real). Lists every configured connector with category, auth type (OAuth vs key), updated time, age-based rotation flag (>6 months → warn), jump-to-card link. Three summary tiles up top: total credentials / OAuth-connected count / older-than-6-months count. New file: `includes/vault.php`.
+- **Webhooks log** (real). Inbound event stream backed by a custom `wp_nexus_webhook_log` table. Each row: when / source / event / verify status. Three summary tiles: total events / verified-of-last-500 / top sources. Auto-pruned after 30 days. New file: `includes/webhooks.php`.
+- **Audit log** (real). Tamper-evident lifecycle log in custom `wp_nexus_audit_log` table. Captures connector.connected / disconnected / failed_validation, backup.created / restored, update.installed / rolled_back, webhook.received, oauth.exchanged / refresh_failed. Filterable by event substring. Auto-pruned after 90 days. New file: `includes/audit.php`.
+- **API & Webhooks** (real). Documents the four public REST endpoints Nexus exposes (`/v1/feed/<channel>`, `/v1/webhook/<connector>`, `/v1/oauth-callback/<connector>`, `/v1/oauth-proxy-callback`) plus the per-provider webhook URLs to register at providers' dashboards.
+
+### Added — inbound webhook receiver
+- **REST endpoint** at `POST /wp-json/nexus/v1/webhook/<connector>`. Accepts payloads, verifies per-provider signatures, logs the event, fires `nexus_webhook_received` action, queues async processing.
+- **Per-provider signature verifiers:** Stripe (`Stripe-Signature` HMAC), Shopify (`X-Shopify-Hmac-Sha256`), Slack (`X-Slack-Signature` with 5-min replay window), GitHub (`X-Hub-Signature-256`), PayPal (webhook_id presence — full verification deferred), Coinbase Commerce (`X-CC-Webhook-Signature`), AnyPay (`X-Anypay-Signature`), Klarna (bearer auth token). Generic webhook URLs without a built-in verifier accept an optional `?token=<shared_secret>` query string for poor-man's auth.
+- **Best-effort event name extraction** from the payload (`type` / `event` / `event_type` / `action` JSON fields, or `x-shopify-topic` / `x-github-event` headers).
+
+### Added — background job queue
+- **Action Scheduler wrapper** (`includes/queue.php`). Uses Action Scheduler when available (bundled with WooCommerce and most modern WP installs), falls back to `wp_cron` otherwise. Same `nexus_queue_async()` / `nexus_queue_recurring()` API regardless.
+- **Auto-pruning jobs** for audit log + webhook log fire once a day.
+
+### Added — 17 new live validators
+Bringing the count from **5 → 22** (out of 85 connectors). Each hits the provider's lightest authenticated endpoint and reports a precise error from the provider on failure:
+- **AI:** Anthropic, OpenAI
+- **Apps:** GitHub, Slack, Notion, Linear, Asana, Calendly, Airtable, Figma, monday.com
+- **Payments:** PayPal
+- **APIs:** Twilio, SendGrid, Resend, Mapbox, Discord (Webhook)
+
+Validators that accept OAuth tokens (`oauth_access_token` from the OAuth flow) check that field first, so OAuth-connected providers also get validated automatically.
+
+### Changed
+- **Connector save / disconnect** now fire `nexus_connector_connected` / `nexus_connector_disconnected` actions. Audit log auto-listens.
+- **Stub renderers** in `tab-renderers.php` removed (keys / webhooks / audit) — they were demo fixtures; the new real implementations supersede them.
+
+### Notes
+- Custom tables are created lazily on first write via `dbDelta`. No activation hook needed; works for existing installs that upgrade without reactivating.
+- ZipArchive PHP extension still required for backup creation (unchanged from 1.7.0); the new audit + webhook log tables only need core MySQL.
+- Phase 2 deferred: webhook **replay** from the log (button is currently shell), full PayPal webhook signature verification (currently relies on `webhook_id` presence + secrecy of the URL), and validators for the remaining ~60 connectors.
+
 ## [1.7.0] — 2026-06-04
 
 ### Added

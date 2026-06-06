@@ -94,6 +94,9 @@ add_action( 'wp_ajax_nexus_connector_save', function() {
 		'updated' => time(),
 	] );
 
+	// Fire lifecycle event — audit log + any future listeners pick it up.
+	do_action( 'nexus_connector_connected', $id, $clean );
+
 	wp_send_json_success( [
 		'msg'         => $verdict['message'] ?? 'Connected.',
 		'id'          => $id,
@@ -107,6 +110,7 @@ add_action( 'wp_ajax_nexus_connector_delete', function() {
 	$id = sanitize_key( wp_unslash( $_POST['connector'] ?? '' ) );
 	if ( ! $id ) wp_send_json_error( 'no id' );
 	nexus_delete_connector( $id );
+	do_action( 'nexus_connector_disconnected', $id );
 	wp_send_json_success( [ 'msg' => 'Disconnected' ] );
 } );
 

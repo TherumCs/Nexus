@@ -421,7 +421,8 @@ add_action( 'init', function() {
 		'label'    => __( 'API & Webhooks', 'nexus' ),
 		'section'  => 'manage',
 		'priority' => 50,
-		'desc'     => __( 'REST API surface, headless mode, CORS origins, outbound webhooks.', 'nexus' ),
+		'desc'     => __( 'REST endpoints Nexus exposes — feed delivery, webhook ingestion, OAuth callbacks.', 'nexus' ),
+		'render'   => 'nexus_render_rest_tab',
 	] );
 
 	Nexus_Connections_Page::register( 'keys', [

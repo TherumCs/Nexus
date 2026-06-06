@@ -237,3 +237,258 @@ function nexus_validate_shopify( array $config ): array {
 	$name = $body['shop']['name'] ?? 'shop';
 	return [ 'ok' => true, 'message' => 'Validated with Shopify (' . $name . ').' ];
 }
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  ADDITIONAL VALIDATORS (1.8.0) — common AI / email / comms / OAuth providers
+// ═════════════════════════════════════════════════════════════════════════════
+
+function nexus_validate_anthropic( array $config ): array {
+	$key = trim( (string) ( $config['api_key'] ?? '' ) );
+	if ( $key === '' ) return [ 'ok' => false, 'message' => 'API Key is required.' ];
+	$res = wp_remote_get( 'https://api.anthropic.com/v1/models', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'x-api-key' => $key, 'anthropic-version' => '2023-06-01', 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'Anthropic rejected the API Key (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Anthropic returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with Anthropic.' ];
+}
+
+function nexus_validate_openai( array $config ): array {
+	$key = trim( (string) ( $config['api_key'] ?? '' ) );
+	if ( $key === '' ) return [ 'ok' => false, 'message' => 'API Key is required.' ];
+	$headers = [ 'Authorization' => 'Bearer ' . $key, 'User-Agent' => nexus_validator_ua() ];
+	if ( ! empty( $config['organization_id'] ) ) $headers['OpenAI-Organization'] = $config['organization_id'];
+	$res = wp_remote_get( 'https://api.openai.com/v1/models', [ 'timeout' => NEXUS_VALIDATOR_TIMEOUT, 'headers' => $headers ] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'OpenAI rejected the API Key (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'OpenAI returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with OpenAI.' ];
+}
+
+function nexus_validate_github( array $config ): array {
+	$tok = trim( (string) ( $config['token'] ?? $config['oauth_access_token'] ?? '' ) );
+	if ( $tok === '' ) return [ 'ok' => false, 'message' => 'Personal Access Token or OAuth token is required.' ];
+	$res = wp_remote_get( 'https://api.github.com/user', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => 'Bearer ' . $tok, 'User-Agent' => nexus_validator_ua(), 'Accept' => 'application/vnd.github+json' ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'GitHub rejected the token (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'GitHub returned HTTP ' . $code . '.' ];
+	$body = json_decode( wp_remote_retrieve_body( $res ), true );
+	return [ 'ok' => true, 'message' => 'Validated as @' . ( $body['login'] ?? 'user' ) . '.' ];
+}
+
+function nexus_validate_slack( array $config ): array {
+	$tok = trim( (string) ( $config['bot_token'] ?? $config['oauth_access_token'] ?? '' ) );
+	if ( $tok === '' ) return [ 'ok' => false, 'message' => 'Bot Token is required.' ];
+	$res = wp_remote_get( 'https://slack.com/api/auth.test', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => 'Bearer ' . $tok, 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$body = json_decode( wp_remote_retrieve_body( $res ), true );
+	if ( empty( $body['ok'] ) ) return [ 'ok' => false, 'message' => 'Slack: ' . ( $body['error'] ?? 'auth_test failed' ) ];
+	return [ 'ok' => true, 'message' => 'Validated in workspace "' . ( $body['team'] ?? '?' ) . '".' ];
+}
+
+function nexus_validate_notion( array $config ): array {
+	$tok = trim( (string) ( $config['integration_token'] ?? $config['oauth_access_token'] ?? '' ) );
+	if ( $tok === '' ) return [ 'ok' => false, 'message' => 'Integration Token is required.' ];
+	$res = wp_remote_get( 'https://api.notion.com/v1/users/me', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => 'Bearer ' . $tok, 'Notion-Version' => $config['notion_version'] ?? '2022-06-28', 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'Notion rejected the token (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Notion returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with Notion.' ];
+}
+
+function nexus_validate_linear( array $config ): array {
+	$key = trim( (string) ( $config['api_key'] ?? $config['oauth_access_token'] ?? '' ) );
+	if ( $key === '' ) return [ 'ok' => false, 'message' => 'API Key is required.' ];
+	$res = wp_remote_post( 'https://api.linear.app/graphql', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => $key, 'Content-Type' => 'application/json', 'User-Agent' => nexus_validator_ua() ],
+		'body'    => wp_json_encode( [ 'query' => '{ viewer { id name } }' ] ),
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$body = json_decode( wp_remote_retrieve_body( $res ), true );
+	if ( empty( $body['data']['viewer']['id'] ) ) return [ 'ok' => false, 'message' => 'Linear: ' . ( $body['errors'][0]['message'] ?? 'GraphQL viewer query failed' ) ];
+	return [ 'ok' => true, 'message' => 'Validated as ' . ( $body['data']['viewer']['name'] ?? '?' ) . '.' ];
+}
+
+function nexus_validate_asana( array $config ): array {
+	$tok = trim( (string) ( $config['access_token'] ?? $config['oauth_access_token'] ?? '' ) );
+	if ( $tok === '' ) return [ 'ok' => false, 'message' => 'Access Token is required.' ];
+	$res = wp_remote_get( 'https://app.asana.com/api/1.0/users/me', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => 'Bearer ' . $tok, 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'Asana rejected the token (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Asana returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with Asana.' ];
+}
+
+function nexus_validate_calendly( array $config ): array {
+	$tok = trim( (string) ( $config['access_token'] ?? $config['oauth_access_token'] ?? '' ) );
+	if ( $tok === '' ) return [ 'ok' => false, 'message' => 'Access Token is required.' ];
+	$res = wp_remote_get( 'https://api.calendly.com/users/me', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => 'Bearer ' . $tok, 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'Calendly rejected the token (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Calendly returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with Calendly.' ];
+}
+
+function nexus_validate_airtable( array $config ): array {
+	$tok = trim( (string) ( $config['access_token'] ?? $config['oauth_access_token'] ?? '' ) );
+	if ( $tok === '' ) return [ 'ok' => false, 'message' => 'Personal Access Token is required.' ];
+	$res = wp_remote_get( 'https://api.airtable.com/v0/meta/whoami', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => 'Bearer ' . $tok, 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'Airtable rejected the PAT (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Airtable returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with Airtable.' ];
+}
+
+function nexus_validate_figma( array $config ): array {
+	$tok = trim( (string) ( $config['access_token'] ?? $config['oauth_access_token'] ?? '' ) );
+	if ( $tok === '' ) return [ 'ok' => false, 'message' => 'Personal Access Token is required.' ];
+	$res = wp_remote_get( 'https://api.figma.com/v1/me', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'X-Figma-Token' => $tok, 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 || $code === 403 ) return [ 'ok' => false, 'message' => 'Figma rejected the token (' . $code . ').' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Figma returned HTTP ' . $code . '.' ];
+	$body = json_decode( wp_remote_retrieve_body( $res ), true );
+	return [ 'ok' => true, 'message' => 'Validated as ' . ( $body['handle'] ?? $body['email'] ?? '?' ) . '.' ];
+}
+
+function nexus_validate_monday( array $config ): array {
+	$tok = trim( (string) ( $config['api_token'] ?? $config['oauth_access_token'] ?? '' ) );
+	if ( $tok === '' ) return [ 'ok' => false, 'message' => 'API Token is required.' ];
+	$res = wp_remote_post( 'https://api.monday.com/v2', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => $tok, 'Content-Type' => 'application/json', 'User-Agent' => nexus_validator_ua() ],
+		'body'    => wp_json_encode( [ 'query' => '{ me { id name } }' ] ),
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$body = json_decode( wp_remote_retrieve_body( $res ), true );
+	if ( empty( $body['data']['me']['id'] ) ) return [ 'ok' => false, 'message' => 'monday.com: ' . ( $body['errors'][0]['message'] ?? 'me query failed' ) ];
+	return [ 'ok' => true, 'message' => 'Validated as ' . ( $body['data']['me']['name'] ?? '?' ) . '.' ];
+}
+
+function nexus_validate_paypal( array $config ): array {
+	$id  = trim( (string) ( $config['client_id']     ?? '' ) );
+	$sec = trim( (string) ( $config['client_secret'] ?? '' ) );
+	if ( $id === '' || $sec === '' ) return [ 'ok' => false, 'message' => 'Client ID + Secret are required.' ];
+	$host = ! empty( $config['sandbox'] ) ? 'api-m.sandbox.paypal.com' : 'api-m.paypal.com';
+	$res = wp_remote_post( "https://{$host}/v1/oauth2/token", [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [
+			'Authorization' => 'Basic ' . base64_encode( $id . ':' . $sec ),
+			'Accept'        => 'application/json',
+			'Content-Type'  => 'application/x-www-form-urlencoded',
+			'User-Agent'    => nexus_validator_ua(),
+		],
+		'body'    => 'grant_type=client_credentials',
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$body = json_decode( wp_remote_retrieve_body( $res ), true );
+	if ( empty( $body['access_token'] ) ) return [ 'ok' => false, 'message' => 'PayPal: ' . ( $body['error_description'] ?? 'token exchange failed' ) ];
+	$mode = ! empty( $config['sandbox'] ) ? 'sandbox' : 'live';
+	return [ 'ok' => true, 'message' => 'Validated with PayPal (' . $mode . ').' ];
+}
+
+function nexus_validate_twilio( array $config ): array {
+	$sid = trim( (string) ( $config['account_sid'] ?? '' ) );
+	$tok = trim( (string) ( $config['auth_token']  ?? '' ) );
+	if ( $sid === '' || $tok === '' ) return [ 'ok' => false, 'message' => 'Account SID + Auth Token are required.' ];
+	$res = wp_remote_get( "https://api.twilio.com/2010-04-01/Accounts/{$sid}.json", [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => 'Basic ' . base64_encode( $sid . ':' . $tok ), 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'Twilio rejected the credentials (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Twilio returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with Twilio.' ];
+}
+
+function nexus_validate_sendgrid( array $config ): array {
+	$key = trim( (string) ( $config['api_key'] ?? '' ) );
+	if ( $key === '' ) return [ 'ok' => false, 'message' => 'API Key is required.' ];
+	$res = wp_remote_get( 'https://api.sendgrid.com/v3/scopes', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => 'Bearer ' . $key, 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'SendGrid rejected the API Key (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'SendGrid returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with SendGrid.' ];
+}
+
+function nexus_validate_resend( array $config ): array {
+	$key = trim( (string) ( $config['api_key'] ?? '' ) );
+	if ( $key === '' ) return [ 'ok' => false, 'message' => 'API Key is required.' ];
+	$res = wp_remote_get( 'https://api.resend.com/domains', [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'Authorization' => 'Bearer ' . $key, 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 ) return [ 'ok' => false, 'message' => 'Resend rejected the API Key (401).' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Resend returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with Resend.' ];
+}
+
+function nexus_validate_mapbox( array $config ): array {
+	$tok = trim( (string) ( $config['access_token'] ?? '' ) );
+	if ( $tok === '' ) return [ 'ok' => false, 'message' => 'Access Token is required.' ];
+	// /tokens/v2 lists tokens for the requesting user — cheapest authenticated call.
+	$res = wp_remote_get( 'https://api.mapbox.com/tokens/v2?access_token=' . rawurlencode( $tok ), [
+		'timeout' => NEXUS_VALIDATOR_TIMEOUT,
+		'headers' => [ 'User-Agent' => nexus_validator_ua() ],
+	] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 401 || $code === 403 ) return [ 'ok' => false, 'message' => 'Mapbox rejected the token (' . $code . ').' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Mapbox returned HTTP ' . $code . '.' ];
+	return [ 'ok' => true, 'message' => 'Validated with Mapbox.' ];
+}
+
+function nexus_validate_discord_webhook( array $config ): array {
+	$url = trim( (string) ( $config['webhook_url'] ?? '' ) );
+	if ( $url === '' ) return [ 'ok' => false, 'message' => 'Webhook URL is required.' ];
+	if ( strpos( $url, 'discord.com/api/webhooks/' ) === false ) {
+		return [ 'ok' => false, 'message' => 'Doesn\'t look like a Discord webhook URL.' ];
+	}
+	// HEAD the URL — Discord returns 200 with metadata when the webhook exists.
+	$res = wp_remote_get( $url, [ 'timeout' => NEXUS_VALIDATOR_TIMEOUT, 'headers' => [ 'User-Agent' => nexus_validator_ua() ] ] );
+	if ( is_wp_error( $res ) ) return [ 'ok' => false, 'message' => $res->get_error_message() ];
+	$code = (int) wp_remote_retrieve_response_code( $res );
+	if ( $code === 404 ) return [ 'ok' => false, 'message' => 'Discord webhook not found (404). It may have been deleted.' ];
+	if ( $code !== 200 ) return [ 'ok' => false, 'message' => 'Discord returned HTTP ' . $code . '.' ];
+	$body = json_decode( wp_remote_retrieve_body( $res ), true );
+	return [ 'ok' => true, 'message' => 'Validated Discord webhook for "' . ( $body['name'] ?? $body['channel_id'] ?? 'channel' ) . '".' ];
+}
