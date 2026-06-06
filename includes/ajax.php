@@ -59,7 +59,19 @@ add_action( 'wp_ajax_nexus_connector_save', function() {
 		if ( $field['type'] === 'checkbox' ) {
 			$clean[ $key ] = ! empty( $val ) ? '1' : '';
 		} elseif ( $field['type'] === 'url' ) {
-			$clean[ $key ] = esc_url_raw( $val );
+			$url = esc_url_raw( $val );
+			// Reject http:// for webhook URLs and other secret-bearing endpoints
+			// when site is not localhost — too easy to leak tokens over the wire.
+			$secret_url_keys = [ 'webhook_url', 'server_url', 'base_url', 'site_url', 'store_url', 'admin_url' ];
+			if ( $url !== '' && in_array( $key, $secret_url_keys, true ) ) {
+				$host = wp_parse_url( $url, PHP_URL_HOST ) ?: '';
+				$scheme = wp_parse_url( $url, PHP_URL_SCHEME ) ?: '';
+				$is_local = in_array( $host, [ 'localhost', '127.0.0.1', '::1' ], true ) || preg_match( '/\.(local|test|localhost)$/i', $host );
+				if ( $scheme === 'http' && ! $is_local ) {
+					wp_send_json_error( [ 'message' => "Refusing to save {$key} over plain HTTP ({$host}) — use HTTPS to keep credentials encrypted in transit." ] );
+				}
+			}
+			$clean[ $key ] = $url;
 		} elseif ( $field['type'] === 'select' ) {
 			$opts = array_keys( $field['options'] ?? [] );
 			$clean[ $key ] = in_array( $val, $opts, true ) ? $val : ( $opts[0] ?? '' );

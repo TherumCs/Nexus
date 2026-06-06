@@ -331,7 +331,9 @@ function nexus_prune_backups(): void {
 	$all = nexus_list_backups();
 	$old = array_slice( $all, NEXUS_UPDATE_BACKUP_KEEP_N );
 	foreach ( $old as $b ) {
-		@unlink( $b['path'] );
+		// Use the (non-silenced) deleter so failures land in the audit log
+		// rather than disappearing into the ether.
+		nexus_delete_backup( $b['file'] );
 	}
 }
 
@@ -339,7 +341,15 @@ function nexus_delete_backup( string $filename ): bool {
 	$filename = basename( $filename ); // strip any path traversal
 	$path     = nexus_backups_dir() . '/' . $filename;
 	if ( ! is_file( $path ) ) return false;
-	return @unlink( $path );
+	$ok = unlink( $path );
+	if ( ! $ok ) {
+		$err = error_get_last()['message'] ?? 'unlink returned false';
+		error_log( 'Nexus: failed to delete backup ' . $filename . ' — ' . $err );
+		if ( function_exists( 'nexus_audit_log' ) ) {
+			nexus_audit_log( 'backup.delete_failed', $filename . ' — ' . $err );
+		}
+	}
+	return $ok;
 }
 
 

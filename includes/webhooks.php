@@ -24,6 +24,18 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 const NEXUS_WEBHOOK_DB_VERSION   = '1';
 const NEXUS_WEBHOOK_RETAIN_DAYS  = 30;
 const NEXUS_WEBHOOK_MAX_LOG_SIZE = 4096;  // bytes of payload stored per event
+const NEXUS_WEBHOOK_RATE_LIMIT_PER_MIN = 240; // per connector, per minute — drops bursts at 4/sec sustained
+const NEXUS_WEBHOOK_LOG_PAGE_SIZE      = 100;
+
+/**
+ * Connectors with built-in inbound webhook signature verifiers.
+ * Single source of truth — referenced by the receiver dispatch, the
+ * admin docs tab, and the connector card UI. Add a new verifier
+ * function `nexus_webhook_verify_<id>()` here AND only here.
+ */
+function nexus_webhook_providers(): array {
+	return [ 'stripe', 'shopify', 'slack', 'github', 'paypal', 'coinbase-commerce', 'anypay', 'klarna' ];
+}
 
 function nexus_webhook_table(): string {
 	global $wpdb;
@@ -58,6 +70,38 @@ function nexus_webhook_url( string $connector_id ): string {
 	return rest_url( 'nexus/v1/webhook/' . sanitize_key( $connector_id ) );
 }
 
+/**
+ * Sliding-minute rate limit using a per-connector transient counter.
+ * Returns true if the call is allowed, false if it should be dropped.
+ */
+function nexus_webhook_under_rate_limit( string $connector_id ): bool {
+	$key   = 'nexus_wh_rate_' . md5( $connector_id );
+	$count = (int) get_transient( $key );
+	if ( $count >= NEXUS_WEBHOOK_RATE_LIMIT_PER_MIN ) return false;
+	set_transient( $key, $count + 1, MINUTE_IN_SECONDS );
+	return true;
+}
+
+/**
+ * Insert into the webhook log table with explicit failure logging.
+ * Previously the raw $wpdb->insert call would silently lose events
+ * on DB error. Now failures land in the audit log + error_log so
+ * we can actually find them.
+ */
+function nexus_webhook_insert_logged( array $row ): bool {
+	global $wpdb;
+	$ok = $wpdb->insert( nexus_webhook_table(), $row, [ '%d', '%s', '%s', '%d', '%d', '%s' ] );
+	if ( $ok === false ) {
+		$err = $wpdb->last_error ?: 'unknown';
+		error_log( 'Nexus: webhook log insert failed — ' . $err );
+		if ( function_exists( 'nexus_audit_log' ) ) {
+			nexus_audit_log( 'webhook.log_insert_failed', ( $row['connector'] ?? '?' ) . ' — ' . $err );
+		}
+		return false;
+	}
+	return true;
+}
+
 
 // ─── REST receiver ───────────────────────────────────────────────────────
 
@@ -73,6 +117,14 @@ function nexus_webhook_receive( WP_REST_Request $request ) {
 	nexus_webhook_ensure_table();
 
 	$connector_id = sanitize_key( $request['connector'] );
+
+	// Cheap rate limit — drops bursts at NEXUS_WEBHOOK_RATE_LIMIT_PER_MIN
+	// per-connector / per-minute. Stops a misbehaving provider (or attacker
+	// finding the URL) from spamming the log table indefinitely.
+	if ( ! nexus_webhook_under_rate_limit( $connector_id ) ) {
+		return new WP_REST_Response( [ 'error' => 'rate_limited' ], 429 );
+	}
+
 	$body         = $request->get_body();
 	$json         = json_decode( $body, true );
 	$saved        = nexus_get_connector( $connector_id );
@@ -114,15 +166,14 @@ function nexus_webhook_receive( WP_REST_Request $request ) {
 
 	$response_code = $verified ? 200 : 401;
 
-	global $wpdb;
-	$wpdb->insert( nexus_webhook_table(), [
+	nexus_webhook_insert_logged( [
 		'ts'            => time(),
 		'connector'     => $connector_id,
 		'event'         => substr( $event, 0, 96 ),
 		'verified'      => $verified ? 1 : 0,
 		'response_code' => $response_code,
 		'payload'       => substr( $body, 0, NEXUS_WEBHOOK_MAX_LOG_SIZE ),
-	], [ '%d', '%s', '%s', '%d', '%d', '%s' ] );
+	] );
 
 	if ( ! $verified ) {
 		return new WP_REST_Response( [ 'error' => 'signature invalid' ], 401 );
@@ -142,11 +193,20 @@ function nexus_webhook_receive( WP_REST_Request $request ) {
 }
 
 function nexus_webhook_recent( int $limit = 500 ): array {
+	return nexus_webhook_page( 1, $limit );
+}
+
+function nexus_webhook_page( int $page = 1, int $per_page = NEXUS_WEBHOOK_LOG_PAGE_SIZE ): array {
 	nexus_webhook_ensure_table();
 	global $wpdb;
-	$table = nexus_webhook_table();
-	$limit = max( 1, min( 2000, $limit ) );
-	$rows = $wpdb->get_results( $wpdb->prepare( "SELECT id, ts, connector, event, verified, response_code FROM {$table} ORDER BY id DESC LIMIT %d", $limit ), ARRAY_A );
+	$table    = nexus_webhook_table();
+	$per_page = max( 1, min( 500, $per_page ) );
+	$page     = max( 1, $page );
+	$offset   = ( $page - 1 ) * $per_page;
+	$rows = $wpdb->get_results( $wpdb->prepare(
+		"SELECT id, ts, connector, event, verified, response_code FROM {$table} ORDER BY id DESC LIMIT %d OFFSET %d",
+		$per_page, $offset
+	), ARRAY_A );
 	return is_array( $rows ) ? $rows : [];
 }
 
@@ -254,8 +314,10 @@ function nexus_render_webhooks_tab( string $tab_id, array $tab ): void {
 		__( 'Webhooks log', 'nexus' ),
 		__( 'Inbound webhook event stream. Each row is one delivery — signature verified per provider, payload kept for 30 days.', 'nexus' )
 	);
-	$rows  = nexus_webhook_recent( 500 );
-	$total = nexus_webhook_count();
+	$page     = max( 1, (int) ( $_GET['paged'] ?? 1 ) );
+	$rows     = nexus_webhook_page( $page, NEXUS_WEBHOOK_LOG_PAGE_SIZE );
+	$total    = nexus_webhook_count();
+	$pages    = max( 1, (int) ceil( $total / NEXUS_WEBHOOK_LOG_PAGE_SIZE ) );
 	$verified = array_filter( $rows, fn( $r ) => (int) $r['verified'] === 1 );
 	$by_connector = [];
 	foreach ( $rows as $r ) $by_connector[ $r['connector'] ] = ( $by_connector[ $r['connector'] ] ?? 0 ) + 1;
@@ -316,6 +378,20 @@ function nexus_render_webhooks_tab( string $tab_id, array $tab ): void {
 			<?php endforeach; endif; ?>
 		</tbody>
 	</table>
+
+	<?php if ( $pages > 1 ): ?>
+	<div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;font-size:12px;color:var(--tx3)">
+		<span><?php printf( esc_html__( 'Page %1$d of %2$d · %3$d per page · %4$d total events', 'nexus' ), $page, $pages, NEXUS_WEBHOOK_LOG_PAGE_SIZE, $total ); ?></span>
+		<span style="display:flex;gap:6px">
+			<?php if ( $page > 1 ): ?>
+				<a class="th-button" style="font-size:11px;padding:4px 10px" href="<?php echo esc_url( add_query_arg( [ 'paged' => $page - 1 ] ) ); ?>">← Prev</a>
+			<?php endif; ?>
+			<?php if ( $page < $pages ): ?>
+				<a class="th-button" style="font-size:11px;padding:4px 10px" href="<?php echo esc_url( add_query_arg( [ 'paged' => $page + 1 ] ) ); ?>">Next →</a>
+			<?php endif; ?>
+		</span>
+	</div>
+	<?php endif; ?>
 	<?php
 }
 
@@ -342,14 +418,14 @@ add_action( 'wp_ajax_nexus_webhook_replay', function() {
 	do_action( 'nexus_webhook_received', $row['connector'], $row['event'] ?: '', $json, $row['payload'] );
 
 	// Log the replay so it's visible in the audit + webhook trail.
-	$wpdb->insert( nexus_webhook_table(), [
+	nexus_webhook_insert_logged( [
 		'ts'            => time(),
 		'connector'     => $row['connector'],
 		'event'         => 'replay · ' . substr( (string) $row['event'], 0, 88 ),
 		'verified'      => 1,
 		'response_code' => 200,
 		'payload'       => $row['payload'],
-	], [ '%d', '%s', '%s', '%d', '%d', '%s' ] );
+	] );
 	if ( function_exists( 'nexus_audit_log' ) ) nexus_audit_log( 'webhook.replayed', $row['connector'] . ( $row['event'] ? ' · ' . $row['event'] : '' ) );
 
 	wp_send_json_success( [ 'message' => 'Replayed.' ] );

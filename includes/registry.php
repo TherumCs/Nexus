@@ -1181,6 +1181,31 @@ function nexus_connector_is_configured( string $id ): bool {
 	return false;
 }
 
+/**
+ * Bulk-fetch every saved connector row in one query. Returns
+ * [ connector_id => decoded_config_row ]. Used by surfaces that
+ * iterate the whole registry (Vault tab, sidebar count summary)
+ * to avoid an N+1 pattern of get_option() per connector.
+ */
+function nexus_get_all_connectors(): array {
+	global $wpdb;
+	$rows = $wpdb->get_results(
+		"SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'nexus_connector_%'",
+		ARRAY_A
+	);
+	$out = [];
+	foreach ( (array) $rows as $r ) {
+		$id = substr( $r['option_name'], strlen( 'nexus_connector_' ) );
+		$data = json_decode( $r['option_value'], true );
+		if ( ! is_array( $data ) ) continue;
+		if ( function_exists( 'nexus_crypto_decrypt_config' ) && ! empty( $data['config'] ) && is_array( $data['config'] ) ) {
+			$data['config'] = nexus_crypto_decrypt_config( $data['config'] );
+		}
+		$out[ $id ] = $data;
+	}
+	return $out;
+}
+
 function nexus_connector_status( array $connector ): array {
 	$id = $connector['id'];
 

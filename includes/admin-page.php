@@ -89,6 +89,8 @@ final class Nexus_Connections_Page {
 		$connected   = 0;
 		$total       = 0;
 		$by_category = [];
+		// Bulk-fetch all saved rows once instead of get_option() per loop iteration.
+		$all_saved = nexus_get_all_connectors();
 		foreach ( nexus_connector_registry() as $c ) {
 			if ( ! empty( $c['built_in'] ) ) continue;
 
@@ -113,9 +115,11 @@ final class Nexus_Connections_Page {
 				$by_category[ $cat ]['total'] = ( $by_category[ $cat ]['total'] ?? 0 ) + 1;
 				$by_category[ $cat ]['done']  = $by_category[ $cat ]['done']  ?? 0;
 			}
-			if ( nexus_connector_is_configured( $c['id'] ) ) {
-				$connected++;
-				if ( $cat ) $by_category[ $cat ]['done']++;
+			$saved = $all_saved[ $c['id'] ] ?? null;
+			if ( $saved && ! empty( $saved['config'] ) ) {
+				foreach ( (array) $saved['config'] as $v ) {
+					if ( $v !== '' ) { $connected++; if ( $cat ) $by_category[ $cat ]['done']++; break; }
+				}
 			}
 		}
 		// Overwrite the static `count` on each tab whose id matches a category.
@@ -707,8 +711,8 @@ function nexus_render_conn_cards( array $connectors ): void {
 				// Show the Nexus-hosted webhook URL inline for connectors that
 				// have a built-in signature verifier — saves the user from
 				// hunting through the API & Webhooks tab. Click-to-copy.
-				$webhook_providers = [ 'stripe', 'shopify', 'slack', 'github', 'paypal', 'coinbase-commerce', 'anypay', 'klarna' ];
-				if ( in_array( $id, $webhook_providers, true ) && function_exists( 'nexus_webhook_url' ) ):
+				// Provider list pulled from the single source of truth in webhooks.php.
+				if ( function_exists( 'nexus_webhook_providers' ) && in_array( $id, nexus_webhook_providers(), true ) && function_exists( 'nexus_webhook_url' ) ):
 					$webhook_url = nexus_webhook_url( $id );
 			?>
 				<div class="nexus-webhook-hint">

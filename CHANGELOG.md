@@ -1,5 +1,32 @@
 # Nexus by Therum — Changelog
 
+## [2.0.0] — 2026-06-04
+
+Hardening pass against the team coding standards. No new features — every change is performance, correctness, or security on existing code. Major version bump because three observable behaviors changed (pagination cuts default page size, HTTPS now enforced on secret-bearing URL fields, webhook receiver rate-limits at 240/min/connector).
+
+### Performance
+- **Vault tab N+1 → 1 query.** Was iterating `nexus_connector_registry()` and calling `nexus_get_connector()` per id — ~85 separate `wp_options` reads on a full registry. Now uses a new `nexus_get_all_connectors()` bulk fetch (single SQL).
+- **Sidebar count summary** uses the same bulk fetch — was the second-biggest N+1 in admin page render.
+- **Audit log paginated** at 50 rows/page (was up to 200 in one render). New `nexus_audit_page()` + `nexus_audit_count_for_filter()` helpers; prev/next links in the tab footer.
+- **Webhook log paginated** at 100 rows/page (was up to 500 in one render). Same pattern.
+
+### Correctness — silent failures now logged
+- **`@unlink` on backup pruning** dropped — uses non-silenced `unlink()` and routes failures through `error_log()` + `nexus_audit_log('backup.delete_failed')` so we actually find out when the disk's full or a file's locked.
+- **Webhook log inserts** wrapped in `nexus_webhook_insert_logged()` — `$wpdb->insert` returning false now writes an `webhook.log_insert_failed` event instead of swallowing the row.
+- **Replay path** uses the same wrapper.
+
+### Security
+- **HTTPS enforcement on secret-bearing URL fields.** Save handler refuses `http://` URLs for `webhook_url`, `server_url`, `base_url`, `site_url`, `store_url`, `admin_url` fields when the host isn't local (`localhost`, `*.local`, `*.test`). Refusal returns a precise message about the field + host. Local sites still work.
+- **Inbound webhook rate limit.** New `nexus_webhook_under_rate_limit()` drops bursts at `NEXUS_WEBHOOK_RATE_LIMIT_PER_MIN` (default 240) per connector per minute. Returns HTTP 429. Defends against URL discovery / misbehaving providers / malicious spam.
+
+### Maintainability — single source of truth
+- **Webhook-providers list deduplicated.** The hardcoded `[ 'stripe', 'shopify', 'slack', 'github', 'paypal', 'coinbase-commerce', 'anypay', 'klarna' ]` was repeated in three places. Now centralized in `nexus_webhook_providers()`. The verifier dispatch, the admin docs tab, and the inline card URL hint all read from the same source.
+
+### Notes
+- **Major version bump** reflects observable behavior change (pagination + HTTPS gate + rate limit), not breaking API change for downstream consumers. The public API surface (`nexus_connector_registry()` / `nexus_connector_is_configured()` / `nexus_get_connector()` / etc.) is unchanged.
+- New constants worth knowing: `NEXUS_AUDIT_PAGE_SIZE` (50), `NEXUS_WEBHOOK_LOG_PAGE_SIZE` (100), `NEXUS_WEBHOOK_RATE_LIMIT_PER_MIN` (240).
+- **Not in this pass** (flagged but deferred — would need test coverage to do safely): splitting `validators.php` into per-category files, splitting `admin-page.php` card renderer, PHPUnit harness, CI workflow. All standards-aligned debt, all low-risk to defer.
+
 ## [1.9.1] — 2026-06-04
 
 Three operational hardenings on top of 1.9.0. No new connectors, no new tabs — security + UX polish only.

@@ -30,14 +30,22 @@ function nexus_render_keys_tab( string $tab_id, array $tab ): void {
 	$validated = 0;
 	$rows      = [];
 
+	// Bulk-fetch every saved row in one query — was N+1 (one get_option
+	// per registry entry) before 2.0.0.
+	$all_saved = nexus_get_all_connectors();
+
 	foreach ( $registry as $id => $c ) {
 		if ( ! empty( $c['built_in'] ) ) continue;
 		if ( ! empty( $c['bridge_only'] ) ) continue;
-		if ( ! nexus_connector_is_configured( $id ) ) continue;
+		$saved   = $all_saved[ $id ] ?? null;
+		if ( ! $saved || empty( $saved['config'] ) ) continue;
+		// Inline is_configured check — saved rows always have at least one non-empty value.
+		$has_value = false;
+		foreach ( (array) $saved['config'] as $v ) { if ( $v !== '' ) { $has_value = true; break; } }
+		if ( ! $has_value ) continue;
 
 		$installed++;
-		$saved   = nexus_get_connector( $id );
-		$config  = $saved['config'] ?? [];
+		$config  = $saved['config'];
 		$updated = (int) ( $saved['updated'] ?? 0 );
 
 		// Best-effort field summary — pull the FIRST password/text field
@@ -200,7 +208,7 @@ function nexus_render_rest_tab( string $tab_id, array $tab ): void {
 				</tr>
 			</thead>
 			<tbody>
-			<?php foreach ( [ 'stripe', 'shopify', 'slack', 'github', 'paypal', 'coinbase-commerce', 'anypay', 'klarna' ] as $c ): ?>
+			<?php foreach ( nexus_webhook_providers() as $c ): ?>
 				<tr style="border-top:1px solid var(--bd)">
 					<td style="padding:8px 0;font-weight:600"><?php echo esc_html( $c ); ?></td>
 					<td style="padding:8px 0"><code style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"><?php echo esc_html( nexus_webhook_url( $c ) ); ?></code></td>

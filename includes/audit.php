@@ -16,6 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 const NEXUS_AUDIT_DB_VERSION = '1';
 const NEXUS_AUDIT_RETENTION_DAYS = 90;
+const NEXUS_AUDIT_PAGE_SIZE = 50;
 
 function nexus_audit_table(): string {
 	global $wpdb;
@@ -82,21 +83,46 @@ function nexus_audit_log( string $event, string $detail = '', $payload = null ):
  * `$event_filter` (e.g. 'backup' matches backup.created + backup.restored).
  */
 function nexus_audit_recent( int $limit = 100, string $event_filter = '' ): array {
+	return nexus_audit_page( 1, $limit, $event_filter );
+}
+
+/**
+ * Paginated reader. Returns the rows for one page. Total row count
+ * is available via nexus_audit_count_for_filter() so the UI can
+ * render pagination links.
+ */
+function nexus_audit_page( int $page = 1, int $per_page = NEXUS_AUDIT_PAGE_SIZE, string $event_filter = '' ): array {
 	nexus_audit_ensure_table();
 	global $wpdb;
-	$table = nexus_audit_table();
-	$limit = max( 1, min( 1000, $limit ) );
+	$table     = nexus_audit_table();
+	$per_page  = max( 1, min( 500, $per_page ) );
+	$page      = max( 1, $page );
+	$offset    = ( $page - 1 ) * $per_page;
 
 	if ( $event_filter === '' ) {
-		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} ORDER BY id DESC LIMIT %d", $limit ), ARRAY_A );
+		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} ORDER BY id DESC LIMIT %d OFFSET %d", $per_page, $offset ), ARRAY_A );
 	} else {
 		$rows = $wpdb->get_results( $wpdb->prepare(
-			"SELECT * FROM {$table} WHERE event LIKE %s ORDER BY id DESC LIMIT %d",
+			"SELECT * FROM {$table} WHERE event LIKE %s ORDER BY id DESC LIMIT %d OFFSET %d",
 			'%' . $wpdb->esc_like( $event_filter ) . '%',
-			$limit
+			$per_page,
+			$offset
 		), ARRAY_A );
 	}
 	return is_array( $rows ) ? $rows : [];
+}
+
+function nexus_audit_count_for_filter( string $event_filter = '' ): int {
+	nexus_audit_ensure_table();
+	global $wpdb;
+	$table = nexus_audit_table();
+	if ( $event_filter === '' ) {
+		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+	}
+	return (int) $wpdb->get_var( $wpdb->prepare(
+		"SELECT COUNT(*) FROM {$table} WHERE event LIKE %s",
+		'%' . $wpdb->esc_like( $event_filter ) . '%'
+	) );
 }
 
 function nexus_audit_count(): int {
@@ -146,9 +172,12 @@ function nexus_render_audit_tab( string $tab_id, array $tab ): void {
 		__( 'Tamper-evident lifecycle log for connectors, credentials, updates, and webhooks. Retention: 90 days.', 'nexus' )
 	);
 
-	$filter = isset( $_GET['event'] ) ? sanitize_text_field( wp_unslash( $_GET['event'] ) ) : '';
-	$rows   = nexus_audit_recent( 200, $filter );
-	$total  = nexus_audit_count();
+	$filter  = isset( $_GET['event'] ) ? sanitize_text_field( wp_unslash( $_GET['event'] ) ) : '';
+	$page    = max( 1, (int) ( $_GET['paged'] ?? 1 ) );
+	$rows    = nexus_audit_page( $page, NEXUS_AUDIT_PAGE_SIZE, $filter );
+	$filt_n  = nexus_audit_count_for_filter( $filter );
+	$total   = nexus_audit_count();
+	$pages   = max( 1, (int) ceil( $filt_n / NEXUS_AUDIT_PAGE_SIZE ) );
 	?>
 	<div style="background:var(--sf);border:1px solid var(--bd);border-radius:14px;padding:18px 20px;margin-bottom:16px">
 		<div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
@@ -187,5 +216,27 @@ function nexus_render_audit_tab( string $tab_id, array $tab ): void {
 			<?php endforeach; endif; ?>
 		</tbody>
 	</table>
+
+	<?php if ( $pages > 1 ): ?>
+	<div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;font-size:12px;color:var(--tx3)">
+		<span>
+			<?php
+				printf(
+					/* translators: 1 = current page, 2 = total pages, 3 = page size, 4 = total matching rows */
+					esc_html__( 'Page %1$d of %2$d · %3$d per page · %4$d matching events', 'nexus' ),
+					$page, $pages, NEXUS_AUDIT_PAGE_SIZE, $filt_n
+				);
+			?>
+		</span>
+		<span style="display:flex;gap:6px">
+			<?php if ( $page > 1 ): ?>
+				<a class="th-button" style="font-size:11px;padding:4px 10px" href="<?php echo esc_url( add_query_arg( [ 'paged' => $page - 1 ] ) ); ?>">← Prev</a>
+			<?php endif; ?>
+			<?php if ( $page < $pages ): ?>
+				<a class="th-button" style="font-size:11px;padding:4px 10px" href="<?php echo esc_url( add_query_arg( [ 'paged' => $page + 1 ] ) ); ?>">Next →</a>
+			<?php endif; ?>
+		</span>
+	</div>
+	<?php endif; ?>
 	<?php
 }
