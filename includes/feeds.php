@@ -125,6 +125,175 @@ add_action( 'save_post_product', function( $post_id ) {
 
 const NEXUS_FEED_CACHE_TTL = 300;  // 5 minutes — channels fetch on schedule, not realtime
 
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  WC CATEGORY → GOOGLE PRODUCT TAXONOMY MAPPING
+//
+//  Stored as one option keyed by WC product_cat term ID → Google
+//  taxonomy ID or path. The normalize step looks up each product's
+//  primary category, finds a mapping, and uses it for the item's
+//  google_product_category — overriding the global default.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const NEXUS_FEED_CATMAP_OPTION = 'nexus_feed_category_map';
+
+function nexus_feed_get_catmap(): array {
+	$raw = get_option( NEXUS_FEED_CATMAP_OPTION, '' );
+	if ( ! $raw ) return [];
+	$d = json_decode( $raw, true );
+	return is_array( $d ) ? $d : [];
+}
+
+function nexus_feed_save_catmap( array $map ): void {
+	// Strip blanks so the option doesn't bloat over time.
+	$clean = [];
+	foreach ( $map as $term_id => $taxonomy ) {
+		$term_id  = (int) $term_id;
+		$taxonomy = trim( (string) $taxonomy );
+		if ( $term_id > 0 && $taxonomy !== '' ) $clean[ $term_id ] = $taxonomy;
+	}
+	update_option( NEXUS_FEED_CATMAP_OPTION, wp_json_encode( $clean ), false );
+	nexus_feed_invalidate_cache();
+}
+
+/**
+ * Resolve the best Google taxonomy for a product by walking its
+ * categories (deepest first) and returning the first mapped value.
+ */
+function nexus_feed_taxonomy_for_product( int $product_id ): string {
+	$map = nexus_feed_get_catmap();
+	if ( ! $map ) return '';
+	$terms = wp_get_post_terms( $product_id, 'product_cat', [ 'fields' => 'all' ] );
+	if ( is_wp_error( $terms ) || ! $terms ) return '';
+	// Sort deepest-first by term depth — child categories beat parents.
+	usort( $terms, function( $a, $b ) {
+		$da = count( get_ancestors( $a->term_id, 'product_cat' ) );
+		$db = count( get_ancestors( $b->term_id, 'product_cat' ) );
+		return $db <=> $da;
+	} );
+	foreach ( $terms as $t ) {
+		if ( ! empty( $map[ $t->term_id ] ) ) {
+			$val = (string) $map[ $t->term_id ];
+			// If it's a numeric ID, resolve to the path label.
+			if ( ctype_digit( $val ) ) {
+				$label = nexus_google_taxonomy_label( $val );
+				return $label ?: $val;
+			}
+			return $val;
+		}
+	}
+	return '';
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  PER-CHANNEL RULES ENGINE
+//
+//  Stored as JSON on the channel config row: an array of
+//    [ when => { field => 'category', op => 'is|contains|not_in', value => '...' },
+//      then => { field => 'condition', value => 'used' } ]
+//  Applied in the normalize step after override resolution.
+// ═════════════════════════════════════════════════════════════════════════════
+
+function nexus_feed_apply_rules( array $item, array $rules, $product, $parent ): array {
+	foreach ( $rules as $rule ) {
+		$when = $rule['when'] ?? [];
+		$then = $rule['then'] ?? [];
+		if ( empty( $when['field'] ) || empty( $then['field'] ) ) continue;
+
+		$test_val = (string) ( $item[ $when['field'] ] ?? '' );
+		$expected = (string) ( $when['value']  ?? '' );
+		$op       = (string) ( $when['op']     ?? 'is' );
+
+		$match = false;
+		switch ( $op ) {
+			case 'is':       $match = strcasecmp( $test_val, $expected ) === 0; break;
+			case 'contains': $match = $expected !== '' && stripos( $test_val, $expected ) !== false; break;
+			case 'not_in':   $match = stripos( $test_val, $expected ) === false; break;
+			case 'empty':    $match = $test_val === ''; break;
+			case 'not_empty':$match = $test_val !== ''; break;
+		}
+		if ( $match ) {
+			$item[ $then['field'] ] = (string) ( $then['value'] ?? '' );
+		}
+	}
+	return $item;
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  DESCRIPTION TEMPLATES — placeholder substitution
+//
+//  Replaces {{ field }} with the item's value. Supports: title,
+//  short_description, description, price, brand, sku, category.
+//  Empty template → use the existing description as-is.
+// ═════════════════════════════════════════════════════════════════════════════
+
+function nexus_feed_render_description_template( string $tpl, array $item, $product ): string {
+	if ( $tpl === '' ) return (string) ( $item['description'] ?? '' );
+	$repl = [
+		'{{ title }}'             => $item['title']        ?? '',
+		'{{ short_description }}' => $product && method_exists( $product, 'get_short_description' ) ? wp_strip_all_tags( $product->get_short_description() ) : '',
+		'{{ description }}'       => $item['description']  ?? '',
+		'{{ price }}'             => $item['price']        ?? '',
+		'{{ brand }}'             => $item['brand']        ?? '',
+		'{{ sku }}'               => $item['id']           ?? '',
+		'{{ category }}'          => $item['google_product_category'] ?? '',
+	];
+	return strtr( $tpl, $repl );
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  FEED FETCH ANALYTICS
+//
+//  Tracks how often each feed URL gets polled, by which user agent.
+//  Stored on the feed config row — `fetch_count` + `last_fetched_at`
+//  + `last_user_agent`. No PII (UA only).
+// ═════════════════════════════════════════════════════════════════════════════
+
+function nexus_feed_record_fetch( string $channel_id, string $user_agent ): void {
+	$row = nexus_feed_config( $channel_id );
+	if ( empty( $row ) ) return;
+	$row['fetch_count']     = (int) ( $row['fetch_count'] ?? 0 ) + 1;
+	$row['last_fetched_at'] = time();
+	$row['last_user_agent'] = substr( (string) $user_agent, 0, 240 );
+	update_option( 'nexus_feed_' . sanitize_key( $channel_id ), wp_json_encode( $row ), false );
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  SCHEDULED PRE-WARM — keep the cache hot
+//
+//  Daily cron action that pre-renders every configured channel into
+//  the cache so the channel's scheduled fetch never hits a cold cache.
+// ═════════════════════════════════════════════════════════════════════════════
+
+add_action( 'nexus_feed_prewarm', 'nexus_feed_prewarm_all' );
+add_action( 'init', function() {
+	if ( function_exists( 'nexus_queue_recurring' ) ) {
+		nexus_queue_recurring( 'nexus_feed_prewarm', [], HOUR_IN_SECONDS );
+	}
+} );
+
+function nexus_feed_prewarm_all(): void {
+	if ( ! class_exists( 'WooCommerce' ) ) return;
+	$channels = nexus_feed_channels();
+	foreach ( $channels as $cid => $ch ) {
+		$row = nexus_feed_config( $cid );
+		if ( empty( $row['enabled'] ) ) continue;
+		$config = $row['config'] ?? [];
+		$items  = nexus_feed_collect_products( $config );
+		$body   = $ch['format'] === 'xml'
+			? nexus_feed_render_google_xml( $items, $config )
+			: nexus_feed_render_csv( $items, $cid, $config );
+		nexus_feed_cache_put( $cid, $body );
+	}
+	if ( function_exists( 'nexus_audit_log' ) ) {
+		nexus_audit_log( 'feed.prewarmed', count( $channels ) . ' channels' );
+	}
+}
+
 function nexus_feed_cache_dir(): string {
 	$uploads = wp_upload_dir();
 	$dir     = trailingslashit( $uploads['basedir'] ) . 'nexus-feeds-cache';
@@ -166,6 +335,74 @@ add_action( 'woocommerce_variation_set_stock', 'nexus_feed_invalidate_cache' );
 
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  WP ADMIN PRODUCTS LIST — feed column + bulk actions
+//
+//  Adds a "In feeds" column to the WC products list page so an admin
+//  can see at-a-glance which products are excluded. Bulk actions let
+//  you flip exclude on/off for many products at once.
+// ═════════════════════════════════════════════════════════════════════════════
+
+add_filter( 'manage_edit-product_columns', function( $cols ) {
+	$cols['nexus_feed_status'] = __( 'In feeds', 'nexus' );
+	return $cols;
+} );
+
+add_action( 'manage_product_posts_custom_column', function( $col, $post_id ) {
+	if ( $col !== 'nexus_feed_status' ) return;
+	$excluded = get_post_meta( $post_id, NEXUS_FEED_OVERRIDE_KEYS['excluded'], true ) === '1';
+	if ( $excluded ) {
+		echo '<span style="color:#a00;font-weight:600">✗ excluded</span>';
+	} else {
+		echo '<span style="color:#10b981">✓ included</span>';
+	}
+}, 10, 2 );
+
+add_filter( 'bulk_actions-edit-product', function( $actions ) {
+	$actions['nexus_feed_exclude'] = __( 'Exclude from Nexus feeds', 'nexus' );
+	$actions['nexus_feed_include'] = __( 'Include in Nexus feeds', 'nexus' );
+	return $actions;
+} );
+
+add_filter( 'handle_bulk_actions-edit-product', function( $redirect, $action, $post_ids ) {
+	if ( ! in_array( $action, [ 'nexus_feed_exclude', 'nexus_feed_include' ], true ) ) return $redirect;
+	$flag = $action === 'nexus_feed_exclude';
+	foreach ( $post_ids as $pid ) {
+		if ( $flag ) {
+			update_post_meta( $pid, NEXUS_FEED_OVERRIDE_KEYS['excluded'], '1' );
+		} else {
+			delete_post_meta( $pid, NEXUS_FEED_OVERRIDE_KEYS['excluded'] );
+		}
+	}
+	nexus_feed_invalidate_cache();
+	return add_query_arg( 'nexus_feed_updated', count( $post_ids ), $redirect );
+}, 10, 3 );
+
+add_action( 'admin_notices', function() {
+	if ( empty( $_GET['nexus_feed_updated'] ) ) return;
+	$n = (int) $_GET['nexus_feed_updated'];
+	echo '<div class="notice notice-success is-dismissible"><p>Updated Nexus feed status on ' . $n . ' product' . ( $n === 1 ? '' : 's' ) . '.</p></div>';
+} );
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  CATEGORY MAPPING — admin AJAX (save / reset)
+// ═════════════════════════════════════════════════════════════════════════════
+
+add_action( 'wp_ajax_nexus_feed_catmap_save', function() {
+	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'forbidden', 403 );
+	check_ajax_referer( 'nexus_connector', 'nonce' );
+
+	$raw = isset( $_POST['map'] ) && is_array( $_POST['map'] ) ? wp_unslash( $_POST['map'] ) : [];
+	$clean = [];
+	foreach ( $raw as $term_id => $taxonomy ) {
+		$clean[ (int) $term_id ] = sanitize_text_field( $taxonomy );
+	}
+	nexus_feed_save_catmap( $clean );
+	wp_send_json_success( [ 'count' => count( array_filter( $clean ) ) ] );
+} );
+
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  CHANNEL REGISTRY
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -190,6 +427,9 @@ function nexus_feed_channels(): array {
 		[ 'key' => 'brand_field',          'label' => 'Per-product brand custom field key', 'type' => 'text', 'placeholder' => 'e.g. _brand — leave blank for the fallback', 'required' => false ],
 		[ 'key' => 'gtin_field',           'label' => 'Per-product GTIN custom field key',  'type' => 'text', 'placeholder' => 'e.g. _gtin',         'required' => false ],
 		[ 'key' => 'mpn_field',            'label' => 'Per-product MPN custom field key',   'type' => 'text', 'placeholder' => 'e.g. _mpn',          'required' => false ],
+
+		// ── Description template (placeholder substitution) ──────────────
+		[ 'key' => 'description_template', 'label' => 'Description template',  'type' => 'text', 'placeholder' => 'e.g. {{ title }} — {{ short_description }} (leave blank for default)', 'required' => false ],
 	];
 
 	$channels = [
@@ -268,6 +508,16 @@ function nexus_feed_channels(): array {
 			'desc'   => 'Klaviyo product catalog feed — powers product recommendations + abandoned cart emails.',
 			'format' => 'csv',
 			'docs'   => 'https://help.klaviyo.com/hc/en-us/articles/115005268747',
+			'fields' => $shared_fields,
+		],
+		'walmart-marketplace' => [
+			'id'     => 'walmart-marketplace',
+			'name'   => 'Walmart Marketplace',
+			'color'  => '#0071dc',
+			'initial'=> 'W',
+			'desc'   => 'Walmart Marketplace seller-feed format. CSV-based, similar schema to Google Shopping with Walmart-specific extensions.',
+			'format' => 'csv',
+			'docs'   => 'https://sellerhelp.walmart.com/seller/s/article/Creating-or-Updating-Items-via-Bulk-Item-Setup',
 			'fields' => $shared_fields,
 		],
 	];
@@ -351,6 +601,10 @@ function nexus_feed_serve( WP_REST_Request $req ) {
 
 	$channel = $channels[ $channel_id ];
 	$config  = $row['config'] ?? [];
+
+	// Track who polls us + how often. Useful for spotting silent feed
+	// drift (Google stopped fetching — why?) and for catching scrapers.
+	nexus_feed_record_fetch( $channel_id, (string) $req->get_header( 'user_agent' ) );
 
 	// Cache layer — feed body cached on disk for NEXUS_FEED_CACHE_TTL
 	// (5 min default). Auto-invalidated on any WC product save/delete
@@ -447,6 +701,18 @@ function nexus_feed_collect_products( array $config ): array {
 			$items[] = $norm;
 		}
 	}
+	// Apply per-channel rules + description template AFTER collection so
+	// they're tested once per item (not per WC variation expansion).
+	$rules    = is_array( $config['rules'] ?? null ) ? $config['rules'] : [];
+	$tpl      = (string) ( $config['description_template'] ?? '' );
+	if ( $rules || $tpl !== '' ) {
+		$items = array_map( function( $i ) use ( $rules, $tpl ) {
+			if ( $rules ) $i = nexus_feed_apply_rules( $i, $rules, null, null );
+			if ( $tpl !== '' ) $i['description'] = nexus_feed_render_description_template( $tpl, $i, null );
+			return $i;
+		}, $items );
+	}
+
 	return array_values( array_filter( $items ) );
 }
 
@@ -673,7 +939,13 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 		'brand'        => $brand,
 		'gtin'         => $gtin,
 		'mpn'          => $mpn,
-		'google_product_category' => $override_gcat ?: (string) ( $config['google_product_category'] ?? '' ),
+		// Resolution order for google_product_category:
+		//   1. Per-product meta-box override (most specific)
+		//   2. WC category → Google taxonomy mapping (next-most specific)
+		//   3. Channel-level default (broadest)
+		'google_product_category' => $override_gcat
+			?: nexus_feed_taxonomy_for_product( $parent_or_self_id )
+			?: (string) ( $config['google_product_category'] ?? '' ),
 		'fb_product_category'     => (string) ( $config['fb_product_category']     ?? '' ),
 		'item_group_id'           => $parent ? (string) $parent->get_id() : '',
 		'color'        => $color,
@@ -989,6 +1261,77 @@ add_action( 'wp_ajax_nexus_feed_delete', function() {
 //  TAB RENDERER — one card per channel, similar shape to connector cards
 // ═════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Renders the WC category → Google taxonomy mapping panel above
+ * the channel cards. Each WC product_cat term gets a row; user picks
+ * a Google taxonomy from the bundled curated list OR pastes a
+ * custom path / ID. Save flows through nexus_feed_catmap_save AJAX.
+ */
+function nexus_render_catmap_editor(): void {
+	$terms = get_terms( [ 'taxonomy' => 'product_cat', 'hide_empty' => false ] );
+	if ( is_wp_error( $terms ) || empty( $terms ) ) return;
+
+	$map      = nexus_feed_get_catmap();
+	$taxonomy = nexus_google_taxonomy();
+	$mapped_n = count( array_filter( $map ) );
+	?>
+	<details class="nexus-catmap" style="margin-bottom:18px;border:1px solid var(--bd);border-radius:14px;background:var(--sf);padding:14px 18px">
+		<summary style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;list-style:none">
+			<div>
+				<div style="font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--tx3)"><?php esc_html_e( 'WC category → Google taxonomy mapping', 'nexus' ); ?></div>
+				<div style="font-size:13px;font-weight:600;margin-top:2px">
+					<?php
+						printf(
+							/* translators: 1 = mapped count, 2 = total WC categories */
+							esc_html__( '%1$d / %2$d categories mapped', 'nexus' ),
+							$mapped_n, count( $terms )
+						);
+					?>
+				</div>
+			</div>
+			<span style="font-size:11px;color:var(--tx3)"><?php esc_html_e( '↓ expand', 'nexus' ); ?></span>
+		</summary>
+		<p style="font-size:12px;color:var(--tx2);margin:12px 0">
+			<?php esc_html_e( "Map each WC product category to a Google Product Taxonomy entry. Per-product overrides win; this is the next-most-specific source. Channel-level google_product_category is the broadest fallback.", 'nexus' ); ?>
+		</p>
+		<form data-nexus-catmap-form>
+			<table style="width:100%;border-collapse:collapse;font-size:13px">
+				<thead>
+					<tr style="text-align:left;color:var(--tx3);font-size:11px">
+						<th style="padding:6px 4px"><?php esc_html_e( 'WC Category', 'nexus' ); ?></th>
+						<th style="padding:6px 4px"><?php esc_html_e( 'Maps to Google Taxonomy', 'nexus' ); ?></th>
+					</tr>
+				</thead>
+				<tbody>
+					<?php foreach ( $terms as $t ):
+						$current = (string) ( $map[ $t->term_id ] ?? '' );
+					?>
+					<tr style="border-top:1px solid var(--bd)">
+						<td style="padding:8px 4px;font-weight:600"><?php echo esc_html( $t->name ); ?> <span style="color:var(--tx3);font-weight:400;font-size:11px">· id <?php echo (int) $t->term_id; ?></span></td>
+						<td style="padding:8px 4px">
+							<select name="map[<?php echo (int) $t->term_id; ?>]" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;background:var(--sf)">
+								<option value=""><?php esc_html_e( '— no mapping (use fallback) —', 'nexus' ); ?></option>
+								<?php foreach ( $taxonomy as $tid => $path ): ?>
+									<option value="<?php echo esc_attr( $tid ); ?>" <?php selected( $current, (string) $tid ); ?> <?php selected( $current, $path ); ?>><?php echo esc_html( $path ); ?></option>
+								<?php endforeach; ?>
+							</select>
+							<?php if ( $current && ! isset( $taxonomy[ (int) $current ] ) && ! in_array( $current, $taxonomy, true ) ): ?>
+								<input type="text" name="map[<?php echo (int) $t->term_id; ?>]" value="<?php echo esc_attr( $current ); ?>" style="margin-top:4px;width:100%;font-size:11px;padding:5px 8px;border:1px solid var(--bd);border-radius:6px" placeholder="<?php esc_attr_e( 'Custom taxonomy path or ID', 'nexus' ); ?>">
+							<?php endif; ?>
+						</td>
+					</tr>
+					<?php endforeach; ?>
+				</tbody>
+			</table>
+			<div style="display:flex;justify-content:flex-end;margin-top:12px">
+				<button type="button" class="th-button th-button-primary" data-nexus-catmap-save><?php esc_html_e( 'Save category mapping', 'nexus' ); ?></button>
+				<span style="margin-left:10px;font-size:12px" data-nexus-catmap-result></span>
+			</div>
+		</form>
+	</details>
+	<?php
+}
+
 function nexus_render_channels_tab( string $tab_id, array $tab ): void {
 	$channels = nexus_feed_channels();
 	$desc = $tab['desc'] ?? '';
@@ -998,6 +1341,9 @@ function nexus_render_channels_tab( string $tab_id, array $tab ): void {
 		echo '<div class="th-cx-stub"><div class="th-cx-stub-mark">Heads up</div><h4 class="th-cx-stub-title">WooCommerce required</h4><p class="th-cx-stub-sub">Channels generate product feeds from WooCommerce. Install + activate WC, then come back.</p></div>';
 		return;
 	}
+
+	// Category mapping editor — collapsible, lives above the channel cards.
+	nexus_render_catmap_editor();
 	?>
 	<div class="th-conn-grid">
 	<?php foreach ( $channels as $ch ):
@@ -1034,6 +1380,23 @@ function nexus_render_channels_tab( string $tab_id, array $tab ): void {
 						);
 					?></p>
 					<input type="text" readonly value="<?php echo esc_attr( $feed_url ); ?>" onclick="this.select()" data-feed-url-input>
+
+					<?php
+						// Analytics — surface fetch count + last-fetch age + UA snippet
+						// so the user can confirm Google/Meta are actually polling.
+						$fetches  = (int) ( $row['fetch_count'] ?? 0 );
+						$last_at  = (int) ( $row['last_fetched_at'] ?? 0 );
+						$last_ua  = (string) ( $row['last_user_agent'] ?? '' );
+					?>
+					<?php if ( $fetches > 0 ): ?>
+						<div style="font-size:11px;color:var(--tx3);margin-top:6px;line-height:1.6">
+							<strong style="color:var(--tx2)"><?php echo (int) $fetches; ?></strong> fetches ·
+							last: <strong style="color:var(--tx2)"><?php echo $last_at ? esc_html( human_time_diff( $last_at ) . ' ago' ) : '—'; ?></strong>
+							<?php if ( $last_ua ): ?><br><span style="opacity:.7">UA: <?php echo esc_html( substr( $last_ua, 0, 90 ) ); ?></span><?php endif; ?>
+						</div>
+					<?php else: ?>
+						<div style="font-size:11px;color:var(--tx3);margin-top:6px"><?php esc_html_e( 'No fetches yet — submit the URL to the channel\'s dashboard to start.', 'nexus' ); ?></div>
+					<?php endif; ?>
 					<div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
 						<a href="<?php echo esc_url( $feed_url ); ?>" target="_blank" rel="noopener" class="th-button">
 							<?php esc_html_e( 'Preview feed →', 'nexus' ); ?>

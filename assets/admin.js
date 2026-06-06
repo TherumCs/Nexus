@@ -117,6 +117,41 @@
 			return;
 		}
 
+		// Save the WC → Google taxonomy mapping (Channels tab)
+		var catmapSave = e.target.closest('[data-nexus-catmap-save]');
+		if (catmapSave) {
+			e.preventDefault();
+			var form = catmapSave.closest('[data-nexus-catmap-form]');
+			var result = form && form.querySelector('[data-nexus-catmap-result]');
+			if (!form) return;
+			catmapSave.disabled = true;
+			catmapSave.dataset.orig = catmapSave.textContent;
+			catmapSave.textContent = 'Saving…';
+			if (result) { result.textContent = ''; result.style.color = ''; }
+
+			var fd = new FormData(form);
+			fd.append('action', 'nexus_feed_catmap_save');
+			fd.append('nonce', NONCE);
+
+			fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					catmapSave.disabled = false;
+					catmapSave.textContent = catmapSave.dataset.orig || 'Save category mapping';
+					if (j && j.success) {
+						if (result) { result.style.color = 'var(--ok)'; result.textContent = '✓ ' + (j.data.count || 0) + ' mapped. Feed cache cleared.'; }
+					} else {
+						if (result) { result.style.color = 'var(--err)'; result.textContent = '✗ ' + ((j && j.data && j.data.message) || 'Save failed.'); }
+					}
+				})
+				.catch(function(){
+					catmapSave.disabled = false;
+					catmapSave.textContent = catmapSave.dataset.orig || 'Save category mapping';
+					if (result) { result.style.color = 'var(--err)'; result.textContent = '✗ Network error.'; }
+				});
+			return;
+		}
+
 		// Validate a feed — runs the pipeline server-side, surfaces
 		// counts + list of products missing required fields.
 		var feedValidate = e.target.closest('[data-feed-validate]');

@@ -1,5 +1,44 @@
 # Nexus by Therum — Changelog
 
+## [2.2.0] — 2026-06-04
+
+Round 3 on Channels. This is the round meant to put us decisively past CTX Feed Pro on the things merchants actually hit pain on.
+
+### Added — WC category → Google taxonomy mapping
+- **Collapsible mapping editor** above the channel cards. Every WC `product_cat` term gets a row. Pick from the bundled curated Google Product Taxonomy (~200 of the most common entries — apparel, electronics, home & garden, beauty, food, sports, baby, toys, media, office, pets, arts) OR paste a custom path / numeric ID for anything obscure.
+- **Resolution order** for each product's `google_product_category` is now: per-product override → WC category → Google taxonomy mapping → channel-level default. Most specific wins.
+- **Walks ancestor chain deepest-first** — if a product has both "Apparel" and "Apparel > Tops > T-Shirts" mapped, the T-Shirts mapping wins.
+- **New file:** `includes/google-taxonomy.php` ships the curated taxonomy.
+
+### Added — per-channel rules engine
+- **Conditional field overrides** per channel. Rules shape: `{ when: { field, op, value }, then: { field, value } }`. Operators: `is`, `contains`, `not_in`, `empty`, `not_empty`.
+- Example: "If `google_product_category` contains 'Apparel', set `gender` to 'unisex'."
+- Applied in the normalize pipeline after per-product overrides.
+
+### Added — description templates
+- **Placeholder substitution** for the description field per channel. Available: `{{ title }}`, `{{ short_description }}`, `{{ description }}`, `{{ price }}`, `{{ brand }}`, `{{ sku }}`, `{{ category }}`.
+- Empty template = current behavior (raw description). Set a template like `{{ title }} — {{ short_description }}` to compose richer descriptions without per-product editing.
+
+### Added — feed fetch analytics
+- **Tracks every poll** of each feed URL: `fetch_count`, `last_fetched_at`, `last_user_agent`. Surfaced on each channel card.
+- Catches silent failure modes ("Google hasn't fetched in 3 days — why?") and lets you confirm submissions are working.
+
+### Added — bulk feed control on Products list
+- **"In feeds" column** on `wp-admin/edit.php?post_type=product`. Shows ✓ included or ✗ excluded per product, at a glance.
+- **Bulk actions** "Exclude from Nexus feeds" / "Include in Nexus feeds" — flip many products at once.
+- Cache auto-invalidates on bulk update.
+
+### Added — scheduled pre-warm cron
+- **Hourly cron** pre-renders every enabled channel into the cache so the channel's scheduled fetch never hits a cold cache. Audit-logged as `feed.prewarmed`.
+
+### Added — Walmart Marketplace channel
+- CSV format, shared schema with Google Shopping plus Walmart-specific extensions accepted. Total channels: 7 → 8.
+
+### Notes
+- Bundled taxonomy is ~200 entries vs Google's 5,500 — covers ~80% of common stores. The custom-paste fallback handles the rest. Re-sync the bundled list annually.
+- Rules engine intentionally simple — no nested conditions, no AND/OR groups. If you need that, write a custom hook on `nexus_feed_apply_rules` filter (Phase 4).
+- Pre-warm runs hourly by default; can be changed via the `nexus_queue_recurring` interval if it's too aggressive for very large catalogs.
+
 ## [2.1.0] — 2026-06-04
 
 Round 2 on the Channels (product feed) system. Five additions targeting the real pain — products getting rejected, no per-product control, expensive regeneration, missing channels.
