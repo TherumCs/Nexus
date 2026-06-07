@@ -152,6 +152,20 @@ final class Nexus_Connections_Page {
 						<span><?php echo esc_html( $oauth_status . ( $oauth_msg ? ' — ' . $oauth_msg : '' ) ); ?></span>
 					<?php endif; ?>
 				</div>
+				<?php // If this page rendered inside the popup window we opened
+				      // from the "Sign in with X" button, close it so the parent
+				      // Nexus admin reloads and shows the new connected state.
+				      // The parent polls window.closed every 500ms and reloads. ?>
+				<script>
+				(function () {
+					try {
+						if (window.opener && window.opener !== window && !window.opener.closed) {
+							// Brief visual confirmation before close.
+							setTimeout(function(){ window.close(); }, 600);
+						}
+					} catch (e) { /* cross-origin opener — ignore */ }
+				})();
+				</script>
 			<?php endif; ?>
 
 			<div class="th-cx-head">

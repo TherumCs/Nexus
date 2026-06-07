@@ -307,88 +307,131 @@
 
 	document.addEventListener('click', function(e) {
 		var oauthBtn = e.target.closest('[data-nexus-oauth-start]');
-		if (oauthBtn) {
-			e.preventDefault();
-			var connectorId = oauthBtn.getAttribute('data-nexus-oauth-start');
-			var card = oauthBtn.closest('[data-connector]');
-			var needsSetup = oauthBtn.getAttribute('data-nexus-oauth-needs-setup') === '1';
+		if (!oauthBtn) return;
+		e.preventDefault();
 
-			// If the foot button is gated (no app creds yet), expand the form
-			// + focus the first OAuth field. Don't fire the AJAX yet.
-			if (needsSetup && card) {
+		var connectorId = oauthBtn.getAttribute('data-nexus-oauth-start');
+		var card        = oauthBtn.closest('[data-connector]');
+		var needsSetup  = oauthBtn.getAttribute('data-nexus-oauth-needs-setup') === '1';
+
+		// Open the popup IMMEDIATELY in the click handler. Browsers block
+		// window.open() that runs after an async hop (popup-blocker policy),
+		// so we open about:blank now and navigate it once we have the URL.
+		// This matches the "Sign in with Google" UX — click button, app's
+		// login page opens in a small window, sign in, window closes, you're
+		// back on Nexus connected.
+		var w = 600, h = 720;
+		var y = Math.max(0, (window.outerHeight - h) / 2 + (window.screenY || 0));
+		var x = Math.max(0, (window.outerWidth  - w) / 2 + (window.screenX || 0));
+		var popup = window.open(
+			'about:blank',
+			'nexus_oauth_' + connectorId,
+			'width=' + w + ',height=' + h + ',left=' + x + ',top=' + y +
+			',menubar=no,toolbar=no,location=yes,status=no,resizable=yes,scrollbars=yes'
+		);
+		if (!popup) {
+			alert('Popup blocked. Allow popups for this site, then click Sign in again.');
+			return;
+		}
+		// Holding page so the user sees something while we save + fetch.
+		try {
+			popup.document.write(
+				'<!doctype html><meta charset="utf-8"><title>Connecting…</title>' +
+				'<style>body{font:14px -apple-system,Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#444;background:#fafafa}</style>' +
+				'<div>Connecting to ' + (connectorId.charAt(0).toUpperCase() + connectorId.slice(1)) + '…</div>'
+			);
+		} catch (_) { /* cross-origin write may throw — harmless */ }
+
+		oauthBtn.disabled = true;
+		var origLabel = oauthBtn.textContent;
+		oauthBtn.textContent = 'Waiting for sign-in…';
+
+		// Poll the popup. When it closes, reload the card so the connected
+		// status flips. This is the same trick "Sign in with Google" uses.
+		var pollId = setInterval(function() {
+			if (popup.closed) {
+				clearInterval(pollId);
+				oauthBtn.disabled = false;
+				oauthBtn.textContent = origLabel;
+				// Reload to pick up the new connected state from server.
+				location.reload();
+			}
+		}, 500);
+
+		var fail = function(msg, expandForm) {
+			clearInterval(pollId);
+			try { popup.close(); } catch (_) {}
+			oauthBtn.disabled = false;
+			oauthBtn.textContent = origLabel;
+			if (expandForm && card) {
 				var form = card.querySelector('[data-conn-form]');
 				if (form) {
 					form.hidden = false;
 					var firstOauthInput = form.querySelector('[data-field="oauth_client_id"]');
-					if (firstOauthInput) {
-						firstOauthInput.focus();
-						firstOauthInput.select && firstOauthInput.select();
-					}
+					if (firstOauthInput) { firstOauthInput.focus(); firstOauthInput.select && firstOauthInput.select(); }
 					var toggle = card.querySelector('.th-conn-foot-actions [data-conn-toggle]');
 					if (toggle) toggle.textContent = 'Cancel';
 				}
-				return;
 			}
+			alert(msg);
+		};
 
-			oauthBtn.disabled = true;
-			var origLabel = oauthBtn.textContent;
-			oauthBtn.textContent = 'Saving creds…';
-
-			// Auto-save the form first. The AJAX endpoint reads client_id/secret
-			// from the DB, not the POST body — so if the user pasted values and
-			// clicked Sign in without saving, the OAuth start would fail with
-			// "missing app credentials." We trigger a save here, wait for it,
-			// then start OAuth. If there's no form (e.g. foot button click on a
-			// fully-configured card), skip the save and go straight to OAuth.
-			var saveBeforeOauth = card
-				? new Promise(function(resolve) {
-					var form = card.querySelector('[data-conn-form]');
-					if (!form || form.hidden) return resolve();
-					var inputs = form.querySelectorAll('[data-field]');
-					if (!inputs.length) return resolve();
-					var saveFd = new FormData();
-					saveFd.append('action', 'nexus_connector_save');
-					saveFd.append('nonce', NONCE);
-					saveFd.append('connector', connectorId);
-					inputs.forEach(function(el) {
-						if (el.type === 'checkbox') {
-							saveFd.append('config[' + el.getAttribute('data-field') + ']', el.checked ? '1' : '');
-						} else {
-							saveFd.append('config[' + el.getAttribute('data-field') + ']', el.value);
-						}
-					});
-					fetch(AJAX, { method:'POST', credentials:'same-origin', body: saveFd })
-						.then(function(){ resolve(); })
-						.catch(function(){ resolve(); }); // proceed even if save errored; OAuth start will report it
-				})
-				: Promise.resolve();
-
-			saveBeforeOauth.then(function() {
-				oauthBtn.textContent = 'Redirecting…';
-				var fd = new FormData();
-				fd.append('action', 'nexus_oauth_start');
-				fd.append('nonce', NONCE);
-				fd.append('connector', connectorId);
-				return fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd });
-			})
-				.then(function(r){ return r.json(); })
-				.then(function(j){
-					if (j && j.success && j.data && j.data.url) {
-						window.location.href = j.data.url;
-					} else {
-						oauthBtn.disabled = false;
-						oauthBtn.textContent = origLabel;
-						var msg = (j && j.data && (j.data.message || j.data)) || 'Could not start OAuth.';
-						alert(msg);
-					}
-				})
-				.catch(function(){
-					oauthBtn.disabled = false;
-					oauthBtn.textContent = origLabel;
-					alert('Network error — try again.');
-				});
-			return;
+		// If we know creds aren't set yet, surface the form right away and
+		// tell the user — don't open Notion to a 400. (Hosted-proxy mode
+		// bypasses this; server returns a URL even with no local creds.)
+		if (needsSetup) {
+			// Still let it try — hosted mode may be on. If server errors with
+			// "missing app", we'll handle below.
 		}
+
+		// Auto-save the inline form (if open + dirty) before starting OAuth,
+		// so freshly-pasted client_id/secret are in the DB by the time the
+		// start endpoint reads them.
+		var saveBeforeOauth = card
+			? new Promise(function(resolve) {
+				var form = card.querySelector('[data-conn-form]');
+				if (!form || form.hidden) return resolve();
+				var inputs = form.querySelectorAll('[data-field]');
+				if (!inputs.length) return resolve();
+				var saveFd = new FormData();
+				saveFd.append('action', 'nexus_connector_save');
+				saveFd.append('nonce', NONCE);
+				saveFd.append('connector', connectorId);
+				inputs.forEach(function(el) {
+					if (el.type === 'checkbox') {
+						saveFd.append('config[' + el.getAttribute('data-field') + ']', el.checked ? '1' : '');
+					} else {
+						saveFd.append('config[' + el.getAttribute('data-field') + ']', el.value);
+					}
+				});
+				fetch(AJAX, { method:'POST', credentials:'same-origin', body: saveFd })
+					.then(function(){ resolve(); })
+					.catch(function(){ resolve(); });
+			})
+			: Promise.resolve();
+
+		saveBeforeOauth.then(function() {
+			var fd = new FormData();
+			fd.append('action', 'nexus_oauth_start');
+			fd.append('nonce', NONCE);
+			fd.append('connector', connectorId);
+			return fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd });
+		})
+			.then(function(r){ return r.json(); })
+			.then(function(j){
+				if (j && j.success && j.data && j.data.url) {
+					// Navigate the popup to the provider's authorize URL.
+					try { popup.location.href = j.data.url; }
+					catch (_) { /* popup may already be on a foreign origin */ }
+				} else {
+					var msg = (j && j.data && (j.data.message || j.data)) || 'Could not start OAuth.';
+					var expand = typeof msg === 'string' && /credentials|client id|client_id|client secret/i.test(msg);
+					fail(msg, expand);
+				}
+			})
+			.catch(function(){
+				fail('Network error — try again.', false);
+			});
 	});
 
 	document.addEventListener('click', function(e) {

@@ -1,5 +1,14 @@
 # Nexus by Therum — Changelog
 
+## [2.3.1] — 2026-06-07
+
+Hotfix — "Sign in with X" now opens the provider's sign-in page in a popup, the way Sign in with Google does it. Previously the button either redirected the whole admin page or silently expanded an inline credentials form.
+
+### Changed — OAuth sign-in UX
+- **Popup window flow.** Clicking `Sign in with [Provider]` opens a 600×720 centered popup window immediately (in the click handler, so popup-blockers don't fire). The popup shows a "Connecting to [Provider]…" holding page while the server builds the authorize URL, then navigates to the provider's actual sign-in page (e.g. `notion.com/oauth/authorize`).
+- **Auto-close on completion.** When the OAuth callback lands back on the Nexus admin page inside the popup, it detects `window.opener` and closes itself after ~600ms. The parent window is polling `window.closed` and reloads to reflect the new connected state.
+- **Inline form no longer hijacks the click.** Removed the short-circuit that quietly expanded the credentials form instead of opening the OAuth flow when client_id wasn't yet saved. Instead we always try the OAuth start endpoint — if the server reports missing app credentials, the popup closes and the inline form expands with focus on the OAuth client_id field plus an alert telling the user what to fill in.
+
 ## [2.3.0] — 2026-06-06
 
 Meta catalog field completeness pass. Audited Meta Commerce Manager's canonical CSV header against what we were emitting and closed every gap so a Nexus → Meta sync now maps 1:1 instead of leaving 10+ fields blank.
