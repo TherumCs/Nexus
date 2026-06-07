@@ -1,5 +1,9 @@
 # Nexus by Therum — Changelog
 
+## [2.5.1] — 2026-06-07
+
+Quiet a noisy `wc_doing_it_wrong` notice. WC 8.3+ promoted `_global_unique_id` from a meta key to a first-class field; using `get_meta()` on it now triggers a deprecation notice (6k+ lines in the error log per feed fetch). Switched the GTIN auto-detect to use `get_global_unique_id()` when available, falling back to the legacy `_gtin`/`_ean`/`_upc`/`_isbn` meta keys.
+
 ## [2.5.0] — 2026-06-07
 
 OAuth coverage audit across all 85 connectors. Wired up every additional provider that actually supports OAuth at the provider level. Connectors with no provider-side OAuth (API-key-only services like Anthropic, OpenAI, Twilio, SendGrid, Mapbox, etc.) stay BYOA-only — there's no upstream OAuth flow to wire.

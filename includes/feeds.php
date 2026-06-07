@@ -956,7 +956,16 @@ function nexus_feed_normalize( $product, $parent, array $config ): ?array {
 		$gtin = (string) $product->get_meta( $gtin_field );
 		if ( ! $gtin && $parent ) $gtin = (string) $parent->get_meta( $gtin_field );
 	}
-	foreach ( [ '_global_unique_id', '_gtin', '_ean', '_upc', '_isbn' ] as $k ) {
+	// WC 8.3+ moved GTIN to a first-class getter — using get_meta() on
+	// `_global_unique_id` triggers a "doing it wrong" notice. Prefer the
+	// getter when it exists, then fall back to the legacy meta keys.
+	if ( ! $gtin && method_exists( $product, 'get_global_unique_id' ) ) {
+		$gtin = (string) $product->get_global_unique_id();
+		if ( ! $gtin && $parent && method_exists( $parent, 'get_global_unique_id' ) ) {
+			$gtin = (string) $parent->get_global_unique_id();
+		}
+	}
+	foreach ( [ '_gtin', '_ean', '_upc', '_isbn' ] as $k ) {
 		if ( $gtin ) break;
 		$gtin = (string) $product->get_meta( $k );
 		if ( ! $gtin && $parent ) $gtin = (string) $parent->get_meta( $k );
