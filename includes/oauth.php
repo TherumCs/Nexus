@@ -262,6 +262,75 @@ function nexus_oauth_providers(): array {
 			'refresh_supported' => false,
 			'docs_register_uri' => 'https://monday.com/developers/apps',
 		],
+
+		// ─── Webflow (CMS) ──────────────────────────────────────────────────
+		'webflow' => [
+			'authorize_url' => 'https://webflow.com/oauth/authorize',
+			'token_url'     => 'https://api.webflow.com/oauth/access_token',
+			'scopes'        => 'sites:read sites:write cms:read cms:write',
+			'refresh_supported' => false, // Webflow access tokens are long-lived
+			'docs_register_uri' => 'https://webflow.com/dashboard/account/apps',
+		],
+
+		// ─── Contentful (CMS) ───────────────────────────────────────────────
+		'contentful' => [
+			'authorize_url' => 'https://be.contentful.com/oauth/authorize',
+			'token_url'     => 'https://be.contentful.com/oauth/token',
+			'scopes'        => 'content_management_manage',
+			'refresh_supported' => false,
+			'docs_register_uri' => 'https://app.contentful.com/account/profile/developers/applications',
+		],
+
+		// ─── BigCommerce (Ecommerce) ────────────────────────────────────────
+		// BigCommerce uses a "single click app" flow — install URL is per-store.
+		// We treat the store hash as the tenant field, similar to Shopify.
+		'bigcommerce' => [
+			'authorize_url' => 'https://login.bigcommerce.com/oauth2/authorize',
+			'token_url'     => 'https://login.bigcommerce.com/oauth2/token',
+			'scopes'        => 'store_v2_products store_v2_orders store_v2_customers store_v2_information_read_only',
+			'refresh_supported' => false, // BC OAuth tokens don't expire
+			'docs_register_uri' => 'https://devtools.bigcommerce.com/my/apps',
+		],
+
+		// ─── Hugging Face (AI) ──────────────────────────────────────────────
+		'huggingface' => [
+			'authorize_url' => 'https://huggingface.co/oauth/authorize',
+			'token_url'     => 'https://huggingface.co/oauth/token',
+			'scopes'        => 'openid profile inference-api',
+			'pkce'          => true,
+			'refresh_supported' => true,
+			'docs_register_uri' => 'https://huggingface.co/settings/connected-applications',
+		],
+
+		// ─── Mollie (Payments) ──────────────────────────────────────────────
+		'mollie' => [
+			'authorize_url' => 'https://my.mollie.com/oauth2/authorize',
+			'token_url'     => 'https://api.mollie.com/oauth2/tokens',
+			'scopes'        => 'payments.read payments.write profiles.read organizations.read refunds.read refunds.write',
+			'refresh_supported' => true,
+			'docs_register_uri' => 'https://my.mollie.com/dashboard/developers/applications',
+		],
+
+		// ─── Discord (Bot install) ──────────────────────────────────────────
+		// Sign-in flow returns a bot install + identify scope. The user
+		// authorizes the bot into a guild during the OAuth dance.
+		'discord' => [
+			'authorize_url' => 'https://discord.com/api/oauth2/authorize',
+			'token_url'     => 'https://discord.com/api/oauth2/token',
+			'scopes'        => 'identify guilds bot applications.commands',
+			'refresh_supported' => true,
+			'docs_register_uri' => 'https://discord.com/developers/applications',
+			'extra_auth_params' => [ 'permissions' => '274877990912' ], // Send Messages + Embed Links + Read History
+		],
+
+		// ─── Brevo / Sendinblue (Email/Marketing API) ───────────────────────
+		'brevo' => [
+			'authorize_url' => 'https://app.brevo.com/oauth/authorize',
+			'token_url'     => 'https://api.brevo.com/v3/oauth/token',
+			'scopes'        => 'campaigns_read campaigns_write contacts_read contacts_write transactional_emails',
+			'refresh_supported' => true,
+			'docs_register_uri' => 'https://app.brevo.com/oauth/applications',
+		],
 	];
 }
 

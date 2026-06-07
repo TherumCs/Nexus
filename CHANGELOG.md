@@ -1,5 +1,22 @@
 # Nexus by Therum — Changelog
 
+## [2.5.0] — 2026-06-07
+
+OAuth coverage audit across all 85 connectors. Wired up every additional provider that actually supports OAuth at the provider level. Connectors with no provider-side OAuth (API-key-only services like Anthropic, OpenAI, Twilio, SendGrid, Mapbox, etc.) stay BYOA-only — there's no upstream OAuth flow to wire.
+
+### Added — 7 new OAuth providers (27 total, up from 20)
+- **CMS group:** Webflow, Contentful
+- **Ecommerce group:** BigCommerce (single-click app, tenant-aware via store hash)
+- **AI group:** Hugging Face (PKCE)
+- **Payments group:** Mollie
+- **Apps group:** Discord (bot install + identify + slash commands)
+- **APIs group:** Brevo (formerly Sendinblue)
+
+Every new entry follows the same shape as the existing 20 — authorize/token URLs, scopes, refresh support, PKCE where the provider requires it, and the docs link to the provider's developer console. Sign-in on these works the moment the Therum proxy has the corresponding `<PROVIDER>_CLIENT_ID` + `_SECRET` set.
+
+### Added — Cloudflare proxy deployment guide
+- New file: `therum-oauth-proxy/DEPLOY.md` — step-by-step to deploy `oauth.therum.studio` on Cloudflare Workers, register one OAuth app per provider, point DNS, verify. Includes per-provider registration table (URL + notes) for all 27 providers, cost estimate, and operational notes (secret rotation, per-site HMAC, monitoring).
+
 ## [2.4.2] — 2026-06-07
 
 Don't send the user into a broken popup when the Therum-hosted OAuth proxy isn't deployed yet (or is down). Pre-flight ping → if proxy is unreachable, return a structured error → popup closes, BYOA section auto-expands on the connector card, Client ID field is focused. User knows what to do next.
