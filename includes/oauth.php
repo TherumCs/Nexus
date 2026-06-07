@@ -306,6 +306,30 @@ function nexus_oauth_proxy_url(): string {
 	return NEXUS_OAUTH_DEFAULT_PROXY_URL;
 }
 
+/**
+ * Pre-flight ping. Cached for 5 minutes — we don't want to add 200ms
+ * of latency to every Sign-in click. Returns true if the proxy host
+ * responds with anything (even a 404) — false on DNS failure or
+ * connect timeout, which is the only case we care about (those are
+ * the failures that make the popup look broken).
+ */
+function nexus_oauth_proxy_reachable(): bool {
+	$url = nexus_oauth_proxy_url();
+	if ( ! $url ) return false;
+	$cache_key = 'nexus_oauth_proxy_reachable_' . md5( $url );
+	$cached    = get_transient( $cache_key );
+	if ( $cached !== false ) return $cached === '1';
+
+	$res = wp_remote_head( $url . '/healthz', [
+		'timeout'     => 3,
+		'redirection' => 1,
+		'sslverify'   => true,
+	] );
+	$ok = ! is_wp_error( $res );
+	set_transient( $cache_key, $ok ? '1' : '0', $ok ? 30 * MINUTE_IN_SECONDS : 5 * MINUTE_IN_SECONDS );
+	return $ok;
+}
+
 function nexus_oauth_proxy_secret(): string {
 	if ( defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' ) && NEXUS_OAUTH_PROXY_SHARED_SECRET ) {
 		return (string) NEXUS_OAUTH_PROXY_SHARED_SECRET;
@@ -394,6 +418,23 @@ function nexus_oauth_authorize_url( string $connector_id ) {
 	$use_byoa      = $client_id !== '' && $client_secret !== '';
 
 	if ( ! $use_byoa && nexus_oauth_hosted_mode() ) {
+		// Pre-flight: is the proxy actually reachable? If the URL doesn't
+		// resolve (e.g. Worker not yet deployed), don't send the user into
+		// a broken popup. Return a structured error the UI can act on by
+		// expanding the BYOA section.
+		$reachable = nexus_oauth_proxy_reachable();
+		if ( ! $reachable ) {
+			return new WP_Error(
+				'nexus_oauth_proxy_unreachable',
+				sprintf(
+					/* translators: %s = proxy hostname */
+					__( 'Therum-hosted OAuth (%s) isn\'t reachable yet. Paste your own OAuth Client ID + Secret below to sign in, or check back once the Therum proxy is live.', 'nexus' ),
+					wp_parse_url( nexus_oauth_proxy_url(), PHP_URL_HOST )
+				),
+				[ 'reason' => 'proxy_unreachable', 'expand_byoa' => true ]
+			);
+		}
+
 		$site_origin = wp_parse_url( home_url(), PHP_URL_SCHEME ) . '://' . wp_parse_url( home_url(), PHP_URL_HOST );
 		$return_url  = admin_url( 'admin.php?page=nexus&nexus_oauth_done=' . sanitize_key( $connector_id ) );
 
@@ -416,7 +457,11 @@ function nexus_oauth_authorize_url( string $connector_id ) {
 	}
 
 	// BYOA path — site holds its own OAuth app credentials.
-	if ( ! $client_id ) return new WP_Error( 'nexus_oauth_missing_app', 'Set your OAuth Client ID + Secret first.' );
+	if ( ! $client_id ) return new WP_Error(
+		'nexus_oauth_missing_app',
+		__( 'Paste your OAuth Client ID + Secret in the "Use your own OAuth app" section below first.', 'nexus' ),
+		[ 'expand_byoa' => true ]
+	);
 
 	$authorize_url = is_callable( $cfg['authorize_url'] )
 		? call_user_func( $cfg['authorize_url'], $conn )
@@ -711,7 +756,12 @@ add_action( 'wp_ajax_nexus_oauth_start', function() {
 	$connector_id = sanitize_key( $_POST['connector'] ?? '' );
 	$url = nexus_oauth_authorize_url( $connector_id );
 	if ( is_wp_error( $url ) ) {
-		wp_send_json_error( [ 'message' => $url->get_error_message() ] );
+		$data = $url->get_error_data();
+		wp_send_json_error( [
+			'message'     => $url->get_error_message(),
+			'expand_byoa' => ! empty( $data['expand_byoa'] ),
+			'reason'      => $data['reason'] ?? $url->get_error_code(),
+		] );
 	}
 	wp_send_json_success( [ 'url' => $url ] );
 } );

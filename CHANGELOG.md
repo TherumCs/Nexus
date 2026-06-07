@@ -1,5 +1,17 @@
 # Nexus by Therum — Changelog
 
+## [2.4.2] — 2026-06-07
+
+Don't send the user into a broken popup when the Therum-hosted OAuth proxy isn't deployed yet (or is down). Pre-flight ping → if proxy is unreachable, return a structured error → popup closes, BYOA section auto-expands on the connector card, Client ID field is focused. User knows what to do next.
+
+### Added
+- `nexus_oauth_proxy_reachable()` — HEAD `/healthz` with 3s timeout, cached 30 min on success / 5 min on failure. Used as pre-flight before sending the user to the popup.
+- `expand_byoa` signal in OAuth start errors — frontend opens the "Use your own OAuth app" `<details>`, scrolls it into view, and focuses the Client ID field.
+
+### Changed
+- `nexus_oauth_authorize_url()` returns a `nexus_oauth_proxy_unreachable` WP_Error when the proxy host doesn't resolve, with a message naming the host and what to do next.
+- "Missing app" error message now points at the BYOA section by name instead of generic "set your OAuth Client ID + Secret first."
+
 ## [2.4.1] — 2026-06-07
 
 Ripped out the OAuth Hub tab and nudge banner. Sign-in is two paths only, no settings ceremony:

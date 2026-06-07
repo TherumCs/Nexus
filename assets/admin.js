@@ -357,20 +357,28 @@
 			}
 		}, 500);
 
-		var fail = function(msg, expandForm) {
+		var fail = function(msg, expandByoa) {
 			clearInterval(pollId);
 			try { popup.close(); } catch (_) {}
 			oauthBtn.disabled = false;
 			oauthBtn.textContent = origLabel;
-			if (expandForm && card) {
+			if (expandByoa && card) {
+				// Open the inline credentials form, expand the BYOA details,
+				// and focus the Client ID field so the user knows exactly
+				// what to fill in.
 				var form = card.querySelector('[data-conn-form]');
 				if (form) {
 					form.hidden = false;
-					var firstOauthInput = form.querySelector('[data-field="oauth_client_id"]');
-					if (firstOauthInput) { firstOauthInput.focus(); firstOauthInput.select && firstOauthInput.select(); }
 					var toggle = card.querySelector('.th-conn-foot-actions [data-conn-toggle]');
 					if (toggle) toggle.textContent = 'Cancel';
 				}
+				var byoa = card.querySelector('.nexus-oauth-byoa');
+				if (byoa) {
+					byoa.open = true;
+					byoa.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				}
+				var cid = card.querySelector('[data-field="oauth_client_id"]');
+				if (cid) { setTimeout(function(){ cid.focus(); cid.select && cid.select(); }, 350); }
 			}
 			alert(msg);
 		};
@@ -416,7 +424,11 @@
 					catch (_) { /* popup may already be on a foreign origin */ }
 				} else {
 					var msg = (j && j.data && (j.data.message || j.data)) || 'Could not start OAuth.';
-					var expand = typeof msg === 'string' && /credentials|client id|client_id|client secret/i.test(msg);
+					// Server tells us whether to expand the BYOA section
+					// (proxy unreachable, missing creds). Fall back to a
+					// keyword sniff for older error paths.
+					var expand = (j && j.data && j.data.expand_byoa)
+						|| (typeof msg === 'string' && /credentials|client id|client_id|client secret|proxy/i.test(msg));
 					fail(msg, expand);
 				}
 			})
