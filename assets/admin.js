@@ -312,7 +312,6 @@
 
 		var connectorId = oauthBtn.getAttribute('data-nexus-oauth-start');
 		var card        = oauthBtn.closest('[data-connector]');
-		var needsSetup  = oauthBtn.getAttribute('data-nexus-oauth-needs-setup') === '1';
 
 		// Open the popup IMMEDIATELY in the click handler. Browsers block
 		// window.open() that runs after an async hop (popup-blocker policy),
@@ -375,14 +374,6 @@
 			}
 			alert(msg);
 		};
-
-		// If we know creds aren't set yet, surface the form right away and
-		// tell the user — don't open Notion to a 400. (Hosted-proxy mode
-		// bypasses this; server returns a URL even with no local creds.)
-		if (needsSetup) {
-			// Still let it try — hosted mode may be on. If server errors with
-			// "missing app", we'll handle below.
-		}
 
 		// Auto-save the inline form (if open + dirty) before starting OAuth,
 		// so freshly-pasted client_id/secret are in the DB by the time the
@@ -969,59 +960,4 @@
 		});
 	}
 
-	// Dismiss the OAuth Hub nudge — sets a user meta with the dismissal time.
-	document.addEventListener('click', function(e) {
-		var dis = e.target.closest('[data-nexus-oauth-hub-dismiss]');
-		if (!dis) return;
-		e.preventDefault();
-		var banner = dis.closest('.nexus-oauth-hub-nudge');
-		if (banner) banner.style.display = 'none';
-		var fd = new FormData();
-		fd.append('action', 'nexus_oauth_hub_dismiss_nudge');
-		fd.append('nonce', NONCE);
-		fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd });
-	});
-
-	// OAuth Hub — save / rotate.
-	document.addEventListener('click', function(e) {
-		var save = e.target.closest('[data-nexus-oauth-hub-save]');
-		var rot  = e.target.closest('[data-nexus-oauth-hub-rotate]');
-		if (!save && !rot) return;
-		e.preventDefault();
-		var form   = (save || rot).closest('[data-nexus-oauth-hub]');
-		if (!form) return;
-		var result = form.querySelector('[data-nexus-oauth-hub-result]');
-		var btn    = save || rot;
-		var orig   = btn.textContent;
-		btn.disabled = true;
-		btn.textContent = save ? 'Saving…' : 'Rotating…';
-
-		var fd = new FormData();
-		fd.append('action', save ? 'nexus_oauth_hub_save' : 'nexus_oauth_hub_rotate');
-		fd.append('nonce', NONCE);
-		if (save) {
-			var enabled = form.querySelector('[data-field="enabled"]');
-			var url     = form.querySelector('[data-field="url"]');
-			var secret  = form.querySelector('[data-field="secret"]');
-			fd.append('enabled', enabled && enabled.checked ? '1' : '0');
-			if (url)    fd.append('url',    url.value);
-			if (secret) fd.append('secret', secret.value);
-		}
-		fetch(AJAX, { method:'POST', credentials:'same-origin', body: fd })
-			.then(function(r){ return r.json(); })
-			.then(function(j){
-				btn.disabled = false;
-				btn.textContent = orig;
-				if (result) {
-					result.style.color = (j && j.success) ? '#15803d' : '#b91c1c';
-					result.textContent = (j && j.data && j.data.message) || (j && j.success ? '✓ Done.' : '✗ Failed.');
-				}
-				if (j && j.success) setTimeout(function(){ location.reload(); }, 900);
-			})
-			.catch(function(){
-				btn.disabled = false;
-				btn.textContent = orig;
-				if (result) { result.style.color = '#b91c1c'; result.textContent = 'Network error.'; }
-			});
-	});
 })();

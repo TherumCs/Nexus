@@ -1,5 +1,25 @@
 # Nexus by Therum — Changelog
 
+## [2.4.1] — 2026-06-07
+
+Ripped out the OAuth Hub tab and nudge banner. Sign-in is two paths only, no settings ceremony:
+
+1. **Click "Sign in with X"** → popup opens to the provider's login (notion.com, google.com, dropbox.com, …) → authorize → connected. Default path. Zero setup.
+2. **"Use your own OAuth app (advanced)"** — collapsed section on each card. Open it only if you want to use your own developer app instead of Therum's hosted one. Paste Client ID + Secret. Done.
+
+### Changed
+- Hosted mode is the unconditional default. Proxy URL hardcoded to `https://oauth.therum.studio`; per-site HMAC secret auto-generated and stored silently on first OAuth attempt. No toggle, no settings tab.
+- Connector card OAuth section rewritten: big primary "Sign in with X" button on top, collapsed "Use your own OAuth app" `<details>` underneath that auto-expands if BYOA creds are already saved.
+- BYOA takes runtime precedence over hosted — if Client ID + Secret are filled on the card, the popup uses those; otherwise it uses the hosted proxy. User never picks which.
+
+### Removed
+- `Manage → OAuth Hub` tab and its renderer/AJAX handlers.
+- Top-of-admin nudge banner.
+- `data-nexus-oauth-needs-setup` gating (the button always opens the popup now).
+
+### For self-hosters
+- `NEXUS_OAUTH_PROXY_URL` and `NEXUS_OAUTH_PROXY_SHARED_SECRET` constants in wp-config.php still override the defaults if you're running your own proxy.
+
 ## [2.4.0] — 2026-06-07
 
 You no longer need to register a developer OAuth app at Google/Notion/Slack/Stripe/etc. to use "Sign in with X" — flip one toggle in the new OAuth Hub tab and every OAuth connector signs in with one click through Therum's hosted proxy.

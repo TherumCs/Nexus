@@ -280,64 +280,45 @@ function nexus_oauth_redirect_uri( string $id ): string {
 }
 
 /**
- * Hosted-proxy mode toggle. When NEXUS_OAUTH_PROXY_URL is defined in
- * wp-config.php, the Sign-in flow bypasses BYOA (per-install OAuth
- * apps) and routes through the Therum-hosted proxy at that URL. The
- * proxy holds the OAuth app credentials, runs the dance, and sends
- * HMAC-signed tokens back to this site.
+ * Hosted mode is the default and only built-in path for one-click sign-in.
+ * Ships pointed at Therum's proxy with a per-site auto-generated secret
+ * stored silently in an option — user never sees this, never configures it.
  *
- * Required when hosted mode is on:
- *   NEXUS_OAUTH_PROXY_URL            — e.g. 'https://oauth.therum.studio'
- *   NEXUS_OAUTH_PROXY_SHARED_SECRET  — same value as proxy's HMAC_SECRET
+ * If a connector has BYOA Client ID + Secret saved on its card, that takes
+ * precedence at authorize time (see nexus_oauth_authorize_url). Two paths,
+ * no UI ceremony:
+ *   1. Click "Sign in with X" → popup → provider login (default)
+ *   2. Paste your own Client ID + Secret on the card → same popup (BYOA)
+ *
+ * Self-hosters can override the proxy URL via the NEXUS_OAUTH_PROXY_URL
+ * constant in wp-config.php.
  */
-/**
- * Hosted mode is active when BOTH a proxy URL and a shared secret are
- * available. Either source counts:
- *   1. wp-config.php constants (NEXUS_OAUTH_PROXY_URL / _SHARED_SECRET)
- *   2. Stored options on the OAuth Hub settings tab (nexus_oauth_hub)
- * Constants always win — they're considered the deployment-locked source.
- */
+const NEXUS_OAUTH_DEFAULT_PROXY_URL = 'https://oauth.therum.studio';
+
 function nexus_oauth_hosted_mode(): bool {
 	return nexus_oauth_proxy_url() !== '' && nexus_oauth_proxy_secret() !== '';
 }
-
-function nexus_oauth_hub_settings(): array {
-	$row = get_option( 'nexus_oauth_hub', [] );
-	if ( ! is_array( $row ) ) $row = [];
-	return wp_parse_args( $row, [
-		'enabled' => '',
-		'url'     => '',
-		'secret'  => '',
-	] );
-}
-
-/**
- * Default Therum-hosted proxy URL — pre-filled in the OAuth Hub settings
- * UI so the user doesn't have to guess it. Override per-site by saving
- * a different URL or defining the constant.
- */
-const NEXUS_OAUTH_DEFAULT_PROXY_URL = 'https://oauth.therum.studio';
 
 function nexus_oauth_proxy_url(): string {
 	if ( defined( 'NEXUS_OAUTH_PROXY_URL' ) && NEXUS_OAUTH_PROXY_URL ) {
 		return rtrim( (string) NEXUS_OAUTH_PROXY_URL, '/' );
 	}
-	$hub = nexus_oauth_hub_settings();
-	if ( ! empty( $hub['enabled'] ) && ! empty( $hub['url'] ) ) {
-		return rtrim( (string) $hub['url'], '/' );
-	}
-	return '';
+	return NEXUS_OAUTH_DEFAULT_PROXY_URL;
 }
 
 function nexus_oauth_proxy_secret(): string {
 	if ( defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' ) && NEXUS_OAUTH_PROXY_SHARED_SECRET ) {
 		return (string) NEXUS_OAUTH_PROXY_SHARED_SECRET;
 	}
-	$hub = nexus_oauth_hub_settings();
-	if ( ! empty( $hub['enabled'] ) && ! empty( $hub['secret'] ) ) {
-		return (string) $hub['secret'];
+	// Per-site auto-generated secret. Stored once, reused forever. The
+	// proxy registers it against the site origin on the first call —
+	// zero manual setup.
+	$s = (string) get_option( 'nexus_oauth_site_secret', '' );
+	if ( $s === '' ) {
+		$s = wp_generate_password( 48, true, false );
+		update_option( 'nexus_oauth_site_secret', $s, false );
 	}
-	return '';
+	return $s;
 }
 
 /**
@@ -405,10 +386,14 @@ function nexus_oauth_authorize_url( string $connector_id ) {
 	$saved = nexus_get_connector( $connector_id );
 	$conn  = $saved['config'] ?? [];
 
-	// Hosted mode — skip BYOA entirely. Hit the Therum proxy with the
-	// site origin + return URL; proxy will use its own OAuth app secret
-	// to run the dance and POST tokens back HMAC-signed.
-	if ( nexus_oauth_hosted_mode() ) {
+	// Two paths only:
+	//   1. BYOA — if user filled Client ID + Secret on the card, use those
+	//   2. Hosted — otherwise route through Therum's proxy (default, no setup)
+	$client_id     = (string) ( $conn['oauth_client_id']     ?? '' );
+	$client_secret = (string) ( $conn['oauth_client_secret'] ?? '' );
+	$use_byoa      = $client_id !== '' && $client_secret !== '';
+
+	if ( ! $use_byoa && nexus_oauth_hosted_mode() ) {
 		$site_origin = wp_parse_url( home_url(), PHP_URL_SCHEME ) . '://' . wp_parse_url( home_url(), PHP_URL_HOST );
 		$return_url  = admin_url( 'admin.php?page=nexus&nexus_oauth_done=' . sanitize_key( $connector_id ) );
 
@@ -430,8 +415,7 @@ function nexus_oauth_authorize_url( string $connector_id ) {
 		return $start_url . '?' . http_build_query( $params );
 	}
 
-	// BYOA mode — Nexus install holds the OAuth app credentials.
-	$client_id = (string) ( $conn['oauth_client_id'] ?? '' );
+	// BYOA path — site holds its own OAuth app credentials.
 	if ( ! $client_id ) return new WP_Error( 'nexus_oauth_missing_app', 'Set your OAuth Client ID + Secret first.' );
 
 	$authorize_url = is_callable( $cfg['authorize_url'] )
@@ -767,13 +751,12 @@ function nexus_oauth_get_token( string $connector_id ): string {
 
 /**
  * Sign-in button block. Rendered in the card foot for OAuth-capable
- * connectors. If the user hasn't entered client_id/secret yet, the
- * button is gated — it opens the form so they can set the app up first.
+ * connectors. Always opens the popup → provider login flow. If the user
+ * has saved their own Client ID + Secret on the card, that's used;
+ * otherwise the popup goes through the Therum-hosted proxy. The user
+ * never sees the difference.
  */
 function nexus_render_oauth_signin_button( array $connector ): void {
-	$saved = nexus_get_connector( $connector['id'] );
-	$conf  = $saved['config'] ?? [];
-	$ready = ! empty( $conf['oauth_client_id'] ) && ! empty( $conf['oauth_client_secret'] );
 	$label = sprintf(
 		/* translators: %s = provider name like Google Drive */
 		__( 'Sign in with %s →', 'nexus' ),
@@ -782,8 +765,7 @@ function nexus_render_oauth_signin_button( array $connector ): void {
 	?>
 	<button type="button"
 		class="th-button th-button-primary"
-		data-nexus-oauth-start="<?php echo esc_attr( $connector['id'] ); ?>"
-		<?php if ( ! $ready ): ?>data-nexus-oauth-needs-setup="1"<?php endif; ?>>
+		data-nexus-oauth-start="<?php echo esc_attr( $connector['id'] ); ?>">
 		<?php echo esc_html( $label ); ?>
 	</button>
 	<?php
@@ -795,12 +777,15 @@ function nexus_render_oauth_signin_button( array $connector ): void {
  * user can register it with the provider's OAuth app.
  */
 function nexus_render_oauth_app_fields( array $connector ): void {
-	$cfg      = nexus_oauth_config_for( $connector['id'] );
+	$cfg = nexus_oauth_config_for( $connector['id'] );
 	if ( ! $cfg ) return;
 	$saved    = nexus_get_connector( $connector['id'] );
 	$conf     = $saved['config'] ?? [];
 	$has_tok  = ! empty( $conf['oauth_access_token'] );
-	$hosted   = nexus_oauth_hosted_mode();
+	$has_cid  = ! empty( $conf['oauth_client_id'] );
+	$has_sec  = ! empty( $conf['oauth_client_secret'] );
+	$register = $cfg['docs_register_uri'] ?? '';
+	$redirect = nexus_oauth_redirect_uri( $connector['id'] );
 	?>
 	<div class="nexus-oauth-section">
 		<div class="nexus-oauth-head">
@@ -811,78 +796,70 @@ function nexus_render_oauth_app_fields( array $connector ): void {
 					'<strong>' . esc_html( $connector['name'] ) . '</strong>'
 				);
 			?>
-			<?php if ( $hosted ): ?>
-				<span class="nexus-oauth-badge" style="background:color-mix(in srgb,var(--ac) 12%,transparent);color:var(--ac)"><?php esc_html_e( 'hosted by Therum', 'nexus' ); ?></span>
-			<?php endif; ?>
 			<?php if ( $has_tok ): ?>
-				<span class="nexus-oauth-badge"><?php esc_html_e( '✓ token on file', 'nexus' ); ?></span>
+				<span class="nexus-oauth-badge"><?php esc_html_e( '✓ signed in', 'nexus' ); ?></span>
 			<?php endif; ?>
 		</div>
 
-		<?php if ( $hosted ): ?>
-			<p class="nexus-oauth-help">
-				<?php esc_html_e( 'One-click sign-in via the Therum OAuth proxy — no app setup required on your side. Click below and authorize on the provider\'s screen.', 'nexus' ); ?>
-			</p>
-			<div class="nexus-oauth-signin-row">
-				<button type="button" class="th-button th-button-primary"
-					data-nexus-oauth-start="<?php echo esc_attr( $connector['id'] ); ?>">
-					<?php
-						printf(
-							/* translators: %s = provider name */
-							esc_html__( 'Sign in with %s →', 'nexus' ),
-							esc_html( $connector['name'] )
-						);
-					?>
-				</button>
-			</div>
-		<?php else: ?>
-			<?php
-				$register = $cfg['docs_register_uri'] ?? '';
-				$redirect = nexus_oauth_redirect_uri( $connector['id'] );
-				$has_cid  = ! empty( $conf['oauth_client_id'] );
-				$has_sec  = ! empty( $conf['oauth_client_secret'] );
-			?>
-			<p class="nexus-oauth-help">
-				<?php esc_html_e( 'Create an OAuth app on the provider\'s developer console, register the redirect URI below, then paste the Client ID + Secret here. After saving, click "Sign in" to authorize.', 'nexus' ); ?>
-			</p>
-			<div class="nexus-oauth-redirect">
-				<label><?php esc_html_e( 'Redirect URI (register this with your OAuth app)', 'nexus' ); ?></label>
-				<input type="text" readonly value="<?php echo esc_attr( $redirect ); ?>" onclick="this.select()">
-				<?php if ( $register ): ?>
-					<a href="<?php echo esc_url( $register ); ?>" target="_blank" rel="noopener"><?php esc_html_e( 'Open developer console ↗', 'nexus' ); ?></a>
-				<?php endif; ?>
-			</div>
-			<div class="th-conn-field">
-				<label><?php esc_html_e( 'OAuth Client ID', 'nexus' ); ?></label>
-				<input type="password" class="th-input" data-field="oauth_client_id"
-					value="<?php echo $has_cid ? '••••••••' : ''; ?>"
-					autocomplete="off">
-			</div>
-			<div class="th-conn-field">
-				<label><?php esc_html_e( 'OAuth Client Secret', 'nexus' ); ?></label>
-				<input type="password" class="th-input" data-field="oauth_client_secret"
-					value="<?php echo $has_sec ? '••••••••' : ''; ?>"
-					autocomplete="off">
-			</div>
-			<div class="nexus-oauth-signin-row">
-				<button type="button" class="th-button th-button-primary"
-					data-nexus-oauth-start="<?php echo esc_attr( $connector['id'] ); ?>">
-					<?php
-						printf(
-							/* translators: %s = provider name */
-							esc_html__( 'Sign in with %s →', 'nexus' ),
-							esc_html( $connector['name'] )
-						);
-					?>
-				</button>
-				<small><?php esc_html_e( 'Click Sign in to save creds + start OAuth in one step.', 'nexus' ); ?></small>
-			</div>
-		<?php endif; ?>
+		<?php // Path 1 — the big one-click button. Always shown. Uses BYOA
+		      // creds if the user has saved them on this card, otherwise
+		      // routes through the Therum-hosted proxy automatically. ?>
+		<div class="nexus-oauth-signin-row">
+			<button type="button" class="th-button th-button-primary"
+				data-nexus-oauth-start="<?php echo esc_attr( $connector['id'] ); ?>"
+				style="font-size:14px;padding:10px 18px">
+				<?php
+					printf(
+						/* translators: %s = provider name */
+						esc_html__( 'Sign in with %s →', 'nexus' ),
+						esc_html( $connector['name'] )
+					);
+				?>
+			</button>
+			<small style="display:block;margin-top:6px;color:var(--tx3)">
+				<?php
+					printf(
+						/* translators: %s = provider name */
+						esc_html__( 'Opens %s in a popup. Authorize there, popup closes, you\'re connected.', 'nexus' ),
+						esc_html( $connector['name'] )
+					);
+				?>
+			</small>
+		</div>
 
-		<hr class="nexus-oauth-divider">
-		<p class="nexus-oauth-fallback-note">
-			<?php esc_html_e( 'Or paste credentials manually below (token / API key path).', 'nexus' ); ?>
-		</p>
+		<?php // Path 2 — collapsed by default. User who wants to use their
+		      // own OAuth app (e.g. has branding requirements, internal app)
+		      // opens this and pastes Client ID + Secret. ?>
+		<details class="nexus-oauth-byoa" style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px"<?php echo ( $has_cid || $has_sec ) ? ' open' : ''; ?>>
+			<summary style="cursor:pointer;font-size:12px;color:var(--tx2);font-weight:600;list-style:none">
+				▸ <?php esc_html_e( 'Use your own OAuth app (advanced)', 'nexus' ); ?>
+			</summary>
+			<div style="margin-top:12px">
+				<p class="nexus-oauth-help" style="font-size:12px;color:var(--tx3);margin:0 0 10px">
+					<?php esc_html_e( 'Skip the hosted proxy and supply your own OAuth app credentials. Create an app on the provider\'s console, register the redirect URI below, paste Client ID + Secret.', 'nexus' ); ?>
+				</p>
+				<div class="nexus-oauth-redirect" style="margin-bottom:10px">
+					<label style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--tx3);display:block;margin-bottom:4px"><?php esc_html_e( 'Redirect URI', 'nexus' ); ?></label>
+					<input type="text" readonly value="<?php echo esc_attr( $redirect ); ?>" onclick="this.select()" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:11px">
+					<?php if ( $register ): ?>
+						<a href="<?php echo esc_url( $register ); ?>" target="_blank" rel="noopener" style="font-size:12px"><?php esc_html_e( 'Open developer console ↗', 'nexus' ); ?></a>
+					<?php endif; ?>
+				</div>
+				<div class="th-conn-field">
+					<label><?php esc_html_e( 'OAuth Client ID', 'nexus' ); ?></label>
+					<input type="password" class="th-input" data-field="oauth_client_id"
+						value="<?php echo $has_cid ? '••••••••' : ''; ?>"
+						autocomplete="off">
+				</div>
+				<div class="th-conn-field">
+					<label><?php esc_html_e( 'OAuth Client Secret', 'nexus' ); ?></label>
+					<input type="password" class="th-input" data-field="oauth_client_secret"
+						value="<?php echo $has_sec ? '••••••••' : ''; ?>"
+						autocomplete="off">
+				</div>
+				<small style="color:var(--tx3);font-size:12px"><?php esc_html_e( 'Once these are filled, "Sign in" uses your app instead of the hosted proxy.', 'nexus' ); ?></small>
+			</div>
+		</details>
 	</div>
 	<?php
 }
@@ -943,199 +920,3 @@ function nexus_oauth_refresh( string $connector_id ) {
 	nexus_oauth_persist_tokens( $connector_id, $json );
 	return $json;
 }
-
-
-// ═════════════════════════════════════════════════════════════════════════════
-//  OAUTH HUB — settings tab + AJAX save handler
-// ═════════════════════════════════════════════════════════════════════════════
-
-/**
- * Renders the OAuth Hub tab. One toggle: enable Therum-hosted OAuth so
- * every OAuth connector signs in with one click — no Client ID/Secret
- * required per provider. URL is pre-filled with the default Therum proxy
- * endpoint; secret is auto-generated on first enable so the user never
- * has to invent or paste one.
- */
-function nexus_render_oauth_hub_tab( string $tab_id, array $tab ): void {
-	$hub          = nexus_oauth_hub_settings();
-	$const_url    = defined( 'NEXUS_OAUTH_PROXY_URL' )           ? (string) NEXUS_OAUTH_PROXY_URL           : '';
-	$const_secret = defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' ) ? (string) NEXUS_OAUTH_PROXY_SHARED_SECRET : '';
-	$active       = nexus_oauth_hosted_mode();
-	$source       = $const_url ? 'wp-config.php' : ( $active ? 'settings (this tab)' : 'not configured' );
-	$url_val      = $hub['url'] ?: NEXUS_OAUTH_DEFAULT_PROXY_URL;
-	$has_secret   = ! empty( $hub['secret'] );
-
-	// Count OAuth-capable connectors so the value prop is concrete.
-	$oauth_count = 0;
-	foreach ( nexus_connector_registry() as $c ) {
-		if ( nexus_oauth_supported( $c['id'] ) ) $oauth_count++;
-	}
-	?>
-	<div class="th-card" style="padding:24px;max-width:900px">
-		<div style="display:flex;align-items:flex-start;gap:18px;margin-bottom:18px">
-			<div style="flex:1">
-				<h2 style="margin:0 0 6px;font-size:18px"><?php esc_html_e( 'Sign in with any app — no API keys', 'nexus' ); ?></h2>
-				<p style="margin:0;color:var(--tx2);font-size:13px;line-height:1.55">
-					<?php
-					printf(
-						/* translators: %d = number of OAuth-capable connectors */
-						esc_html( _n(
-							'Enable the Therum OAuth proxy to make all %d sign-in-with-X buttons work out of the box. The proxy holds the OAuth app credentials so you never have to register a developer app at Google, Notion, Slack, Stripe, etc.',
-							'Enable the Therum OAuth proxy to make all %d sign-in-with-X buttons work out of the box. The proxy holds the OAuth app credentials so you never have to register a developer app at Google, Notion, Slack, Stripe, etc.',
-							$oauth_count,
-							'nexus'
-						) ),
-						(int) $oauth_count
-					);
-					?>
-				</p>
-			</div>
-			<div>
-				<?php if ( $active ): ?>
-					<span class="th-badge" style="background:color-mix(in srgb,#22c55e 16%,transparent);color:#15803d;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600">● <?php esc_html_e( 'ACTIVE', 'nexus' ); ?></span>
-				<?php else: ?>
-					<span class="th-badge" style="background:color-mix(in srgb,#94a3b8 16%,transparent);color:#64748b;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600">○ <?php esc_html_e( 'OFF', 'nexus' ); ?></span>
-				<?php endif; ?>
-			</div>
-		</div>
-
-		<?php if ( $const_url ): ?>
-			<div style="background:color-mix(in srgb,var(--ac) 8%,transparent);border:1px solid color-mix(in srgb,var(--ac) 24%,transparent);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;line-height:1.5">
-				<strong><?php esc_html_e( 'Locked by wp-config.php', 'nexus' ); ?></strong> —
-				<?php esc_html_e( 'Constants are defined in code, so the settings below are read-only. Edit wp-config.php to change.', 'nexus' ); ?>
-			</div>
-		<?php endif; ?>
-
-		<form data-nexus-oauth-hub style="display:flex;flex-direction:column;gap:14px">
-			<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:600">
-				<input type="checkbox" data-field="enabled" <?php checked( ! empty( $hub['enabled'] ) ); disabled( (bool) $const_url ); ?>>
-				<span><?php esc_html_e( 'Use Therum hosted OAuth (recommended)', 'nexus' ); ?></span>
-			</label>
-
-			<div>
-				<label style="display:block;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--tx3);margin-bottom:6px">
-					<?php esc_html_e( 'Proxy URL', 'nexus' ); ?>
-				</label>
-				<input type="url" class="th-input" data-field="url"
-					value="<?php echo esc_attr( $const_url ?: $url_val ); ?>"
-					placeholder="<?php echo esc_attr( NEXUS_OAUTH_DEFAULT_PROXY_URL ); ?>"
-					<?php disabled( (bool) $const_url ); ?>
-					style="width:100%">
-				<small style="color:var(--tx3);font-size:12px">
-					<?php
-					printf(
-						/* translators: %s = default URL */
-						esc_html__( 'Default: %s — change only if you self-host the proxy.', 'nexus' ),
-						'<code>' . esc_html( NEXUS_OAUTH_DEFAULT_PROXY_URL ) . '</code>'
-					);
-					?>
-				</small>
-			</div>
-
-			<div>
-				<label style="display:block;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--tx3);margin-bottom:6px">
-					<?php esc_html_e( 'Shared secret', 'nexus' ); ?>
-				</label>
-				<div style="display:flex;gap:8px">
-					<input type="password" class="th-input" data-field="secret"
-						value="<?php echo $has_secret || $const_secret ? '••••••••••••••••' : ''; ?>"
-						placeholder="<?php esc_attr_e( 'Auto-generated on enable', 'nexus' ); ?>"
-						<?php disabled( (bool) $const_url ); ?>
-						style="flex:1">
-					<?php if ( ! $const_url ): ?>
-						<button type="button" class="th-button" data-nexus-oauth-hub-rotate>
-							<?php esc_html_e( 'Rotate', 'nexus' ); ?>
-						</button>
-					<?php endif; ?>
-				</div>
-				<small style="color:var(--tx3);font-size:12px">
-					<?php esc_html_e( 'HMAC key used to verify proxy → site callbacks. Auto-generated if left blank. Must match the HMAC_SECRET on the proxy side.', 'nexus' ); ?>
-				</small>
-			</div>
-
-			<div style="display:flex;justify-content:flex-end;gap:10px;padding-top:6px">
-				<button type="button" class="th-button th-button-primary" data-nexus-oauth-hub-save <?php disabled( (bool) $const_url ); ?>>
-					<?php esc_html_e( 'Save settings', 'nexus' ); ?>
-				</button>
-			</div>
-			<div data-nexus-oauth-hub-result style="font-size:13px;min-height:18px"></div>
-		</form>
-
-		<div style="margin-top:24px;padding-top:18px;border-top:1px solid var(--bd);font-size:13px;line-height:1.6;color:var(--tx2)">
-			<strong style="color:var(--tx)"><?php esc_html_e( 'How it works', 'nexus' ); ?></strong>
-			<ol style="margin:8px 0 0;padding-left:20px">
-				<li><?php esc_html_e( 'User clicks "Sign in with [Provider]" on any OAuth connector card.', 'nexus' ); ?></li>
-				<li><?php esc_html_e( 'A popup opens to the provider\'s login page (e.g. notion.com/oauth/authorize) using Therum\'s registered OAuth app.', 'nexus' ); ?></li>
-				<li><?php esc_html_e( 'User authorizes the app on the provider\'s screen.', 'nexus' ); ?></li>
-				<li><?php esc_html_e( 'Provider redirects to Therum\'s proxy → proxy exchanges the code for tokens → proxy sends HMAC-signed tokens back to this site → connector flips to "connected."', 'nexus' ); ?></li>
-			</ol>
-			<p style="margin-top:12px;color:var(--tx3);font-size:12px">
-				<?php
-				printf(
-					/* translators: %s = current source */
-					esc_html__( 'Source: %s. Constants in wp-config.php always win over this UI.', 'nexus' ),
-					'<code>' . esc_html( $source ) . '</code>'
-				);
-				?>
-			</p>
-		</div>
-	</div>
-	<?php
-}
-
-add_action( 'wp_ajax_nexus_oauth_hub_save', function() {
-	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( [ 'message' => 'forbidden' ], 403 );
-	check_ajax_referer( 'nexus_connector', 'nonce' );
-
-	if ( defined( 'NEXUS_OAUTH_PROXY_URL' ) ) {
-		wp_send_json_error( [ 'message' => 'Locked by wp-config.php — remove the constants to manage from this UI.' ] );
-	}
-
-	$enabled = ! empty( $_POST['enabled'] ) && $_POST['enabled'] !== '0';
-	$url     = isset( $_POST['url'] )    ? esc_url_raw( wp_unslash( (string) $_POST['url'] ) )    : '';
-	$secret  = isset( $_POST['secret'] ) ? sanitize_text_field( wp_unslash( (string) $_POST['secret'] ) ) : '';
-
-	// Treat the masked placeholder as "no change" — pull existing.
-	$current = nexus_oauth_hub_settings();
-	if ( $secret === '••••••••••••••••' ) $secret = (string) $current['secret'];
-
-	// Auto-default the URL if user blanked it.
-	if ( ! $url ) $url = NEXUS_OAUTH_DEFAULT_PROXY_URL;
-
-	// Auto-generate a secret on first enable so the user never has to invent one.
-	if ( $enabled && ! $secret ) {
-		$secret = wp_generate_password( 48, true, false );
-	}
-
-	update_option( 'nexus_oauth_hub', [
-		'enabled' => $enabled ? '1' : '',
-		'url'     => $url,
-		'secret'  => $secret,
-	], false );
-
-	wp_send_json_success( [
-		'message' => $enabled
-			? 'Hosted OAuth enabled. Test by clicking Sign in on any OAuth connector.'
-			: 'Saved. Hosted OAuth is OFF — connectors will use the BYOA Client ID/Secret path.',
-		'active'  => nexus_oauth_hosted_mode(),
-	] );
-} );
-
-add_action( 'wp_ajax_nexus_oauth_hub_rotate', function() {
-	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( [ 'message' => 'forbidden' ], 403 );
-	check_ajax_referer( 'nexus_connector', 'nonce' );
-	if ( defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' ) ) {
-		wp_send_json_error( [ 'message' => 'Locked by wp-config.php' ] );
-	}
-	$current = nexus_oauth_hub_settings();
-	$current['secret'] = wp_generate_password( 48, true, false );
-	update_option( 'nexus_oauth_hub', $current, false );
-	wp_send_json_success( [ 'message' => 'Shared secret rotated. Update the proxy\'s HMAC_SECRET to match.' ] );
-} );
-
-add_action( 'wp_ajax_nexus_oauth_hub_dismiss_nudge', function() {
-	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( [ 'message' => 'forbidden' ], 403 );
-	check_ajax_referer( 'nexus_connector', 'nonce' );
-	update_user_meta( get_current_user_id(), 'nexus_oauth_hub_nudge_dismissed', time() );
-	wp_send_json_success();
-} );
