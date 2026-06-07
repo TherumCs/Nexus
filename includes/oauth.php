@@ -290,19 +290,54 @@ function nexus_oauth_redirect_uri( string $id ): string {
  *   NEXUS_OAUTH_PROXY_URL            — e.g. 'https://oauth.therum.studio'
  *   NEXUS_OAUTH_PROXY_SHARED_SECRET  — same value as proxy's HMAC_SECRET
  */
+/**
+ * Hosted mode is active when BOTH a proxy URL and a shared secret are
+ * available. Either source counts:
+ *   1. wp-config.php constants (NEXUS_OAUTH_PROXY_URL / _SHARED_SECRET)
+ *   2. Stored options on the OAuth Hub settings tab (nexus_oauth_hub)
+ * Constants always win — they're considered the deployment-locked source.
+ */
 function nexus_oauth_hosted_mode(): bool {
-	return defined( 'NEXUS_OAUTH_PROXY_URL' )
-		&& defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' )
-		&& NEXUS_OAUTH_PROXY_URL !== ''
-		&& NEXUS_OAUTH_PROXY_SHARED_SECRET !== '';
+	return nexus_oauth_proxy_url() !== '' && nexus_oauth_proxy_secret() !== '';
 }
 
+function nexus_oauth_hub_settings(): array {
+	$row = get_option( 'nexus_oauth_hub', [] );
+	if ( ! is_array( $row ) ) $row = [];
+	return wp_parse_args( $row, [
+		'enabled' => '',
+		'url'     => '',
+		'secret'  => '',
+	] );
+}
+
+/**
+ * Default Therum-hosted proxy URL — pre-filled in the OAuth Hub settings
+ * UI so the user doesn't have to guess it. Override per-site by saving
+ * a different URL or defining the constant.
+ */
+const NEXUS_OAUTH_DEFAULT_PROXY_URL = 'https://oauth.therum.studio';
+
 function nexus_oauth_proxy_url(): string {
-	return rtrim( (string) ( defined( 'NEXUS_OAUTH_PROXY_URL' ) ? NEXUS_OAUTH_PROXY_URL : '' ), '/' );
+	if ( defined( 'NEXUS_OAUTH_PROXY_URL' ) && NEXUS_OAUTH_PROXY_URL ) {
+		return rtrim( (string) NEXUS_OAUTH_PROXY_URL, '/' );
+	}
+	$hub = nexus_oauth_hub_settings();
+	if ( ! empty( $hub['enabled'] ) && ! empty( $hub['url'] ) ) {
+		return rtrim( (string) $hub['url'], '/' );
+	}
+	return '';
 }
 
 function nexus_oauth_proxy_secret(): string {
-	return (string) ( defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' ) ? NEXUS_OAUTH_PROXY_SHARED_SECRET : '' );
+	if ( defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' ) && NEXUS_OAUTH_PROXY_SHARED_SECRET ) {
+		return (string) NEXUS_OAUTH_PROXY_SHARED_SECRET;
+	}
+	$hub = nexus_oauth_hub_settings();
+	if ( ! empty( $hub['enabled'] ) && ! empty( $hub['secret'] ) ) {
+		return (string) $hub['secret'];
+	}
+	return '';
 }
 
 /**
@@ -908,3 +943,199 @@ function nexus_oauth_refresh( string $connector_id ) {
 	nexus_oauth_persist_tokens( $connector_id, $json );
 	return $json;
 }
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  OAUTH HUB — settings tab + AJAX save handler
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Renders the OAuth Hub tab. One toggle: enable Therum-hosted OAuth so
+ * every OAuth connector signs in with one click — no Client ID/Secret
+ * required per provider. URL is pre-filled with the default Therum proxy
+ * endpoint; secret is auto-generated on first enable so the user never
+ * has to invent or paste one.
+ */
+function nexus_render_oauth_hub_tab( string $tab_id, array $tab ): void {
+	$hub          = nexus_oauth_hub_settings();
+	$const_url    = defined( 'NEXUS_OAUTH_PROXY_URL' )           ? (string) NEXUS_OAUTH_PROXY_URL           : '';
+	$const_secret = defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' ) ? (string) NEXUS_OAUTH_PROXY_SHARED_SECRET : '';
+	$active       = nexus_oauth_hosted_mode();
+	$source       = $const_url ? 'wp-config.php' : ( $active ? 'settings (this tab)' : 'not configured' );
+	$url_val      = $hub['url'] ?: NEXUS_OAUTH_DEFAULT_PROXY_URL;
+	$has_secret   = ! empty( $hub['secret'] );
+
+	// Count OAuth-capable connectors so the value prop is concrete.
+	$oauth_count = 0;
+	foreach ( nexus_connector_registry() as $c ) {
+		if ( nexus_oauth_supported( $c['id'] ) ) $oauth_count++;
+	}
+	?>
+	<div class="th-card" style="padding:24px;max-width:900px">
+		<div style="display:flex;align-items:flex-start;gap:18px;margin-bottom:18px">
+			<div style="flex:1">
+				<h2 style="margin:0 0 6px;font-size:18px"><?php esc_html_e( 'Sign in with any app — no API keys', 'nexus' ); ?></h2>
+				<p style="margin:0;color:var(--tx2);font-size:13px;line-height:1.55">
+					<?php
+					printf(
+						/* translators: %d = number of OAuth-capable connectors */
+						esc_html( _n(
+							'Enable the Therum OAuth proxy to make all %d sign-in-with-X buttons work out of the box. The proxy holds the OAuth app credentials so you never have to register a developer app at Google, Notion, Slack, Stripe, etc.',
+							'Enable the Therum OAuth proxy to make all %d sign-in-with-X buttons work out of the box. The proxy holds the OAuth app credentials so you never have to register a developer app at Google, Notion, Slack, Stripe, etc.',
+							$oauth_count,
+							'nexus'
+						) ),
+						(int) $oauth_count
+					);
+					?>
+				</p>
+			</div>
+			<div>
+				<?php if ( $active ): ?>
+					<span class="th-badge" style="background:color-mix(in srgb,#22c55e 16%,transparent);color:#15803d;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600">● <?php esc_html_e( 'ACTIVE', 'nexus' ); ?></span>
+				<?php else: ?>
+					<span class="th-badge" style="background:color-mix(in srgb,#94a3b8 16%,transparent);color:#64748b;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600">○ <?php esc_html_e( 'OFF', 'nexus' ); ?></span>
+				<?php endif; ?>
+			</div>
+		</div>
+
+		<?php if ( $const_url ): ?>
+			<div style="background:color-mix(in srgb,var(--ac) 8%,transparent);border:1px solid color-mix(in srgb,var(--ac) 24%,transparent);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;line-height:1.5">
+				<strong><?php esc_html_e( 'Locked by wp-config.php', 'nexus' ); ?></strong> —
+				<?php esc_html_e( 'Constants are defined in code, so the settings below are read-only. Edit wp-config.php to change.', 'nexus' ); ?>
+			</div>
+		<?php endif; ?>
+
+		<form data-nexus-oauth-hub style="display:flex;flex-direction:column;gap:14px">
+			<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:600">
+				<input type="checkbox" data-field="enabled" <?php checked( ! empty( $hub['enabled'] ) ); disabled( (bool) $const_url ); ?>>
+				<span><?php esc_html_e( 'Use Therum hosted OAuth (recommended)', 'nexus' ); ?></span>
+			</label>
+
+			<div>
+				<label style="display:block;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--tx3);margin-bottom:6px">
+					<?php esc_html_e( 'Proxy URL', 'nexus' ); ?>
+				</label>
+				<input type="url" class="th-input" data-field="url"
+					value="<?php echo esc_attr( $const_url ?: $url_val ); ?>"
+					placeholder="<?php echo esc_attr( NEXUS_OAUTH_DEFAULT_PROXY_URL ); ?>"
+					<?php disabled( (bool) $const_url ); ?>
+					style="width:100%">
+				<small style="color:var(--tx3);font-size:12px">
+					<?php
+					printf(
+						/* translators: %s = default URL */
+						esc_html__( 'Default: %s — change only if you self-host the proxy.', 'nexus' ),
+						'<code>' . esc_html( NEXUS_OAUTH_DEFAULT_PROXY_URL ) . '</code>'
+					);
+					?>
+				</small>
+			</div>
+
+			<div>
+				<label style="display:block;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--tx3);margin-bottom:6px">
+					<?php esc_html_e( 'Shared secret', 'nexus' ); ?>
+				</label>
+				<div style="display:flex;gap:8px">
+					<input type="password" class="th-input" data-field="secret"
+						value="<?php echo $has_secret || $const_secret ? '••••••••••••••••' : ''; ?>"
+						placeholder="<?php esc_attr_e( 'Auto-generated on enable', 'nexus' ); ?>"
+						<?php disabled( (bool) $const_url ); ?>
+						style="flex:1">
+					<?php if ( ! $const_url ): ?>
+						<button type="button" class="th-button" data-nexus-oauth-hub-rotate>
+							<?php esc_html_e( 'Rotate', 'nexus' ); ?>
+						</button>
+					<?php endif; ?>
+				</div>
+				<small style="color:var(--tx3);font-size:12px">
+					<?php esc_html_e( 'HMAC key used to verify proxy → site callbacks. Auto-generated if left blank. Must match the HMAC_SECRET on the proxy side.', 'nexus' ); ?>
+				</small>
+			</div>
+
+			<div style="display:flex;justify-content:flex-end;gap:10px;padding-top:6px">
+				<button type="button" class="th-button th-button-primary" data-nexus-oauth-hub-save <?php disabled( (bool) $const_url ); ?>>
+					<?php esc_html_e( 'Save settings', 'nexus' ); ?>
+				</button>
+			</div>
+			<div data-nexus-oauth-hub-result style="font-size:13px;min-height:18px"></div>
+		</form>
+
+		<div style="margin-top:24px;padding-top:18px;border-top:1px solid var(--bd);font-size:13px;line-height:1.6;color:var(--tx2)">
+			<strong style="color:var(--tx)"><?php esc_html_e( 'How it works', 'nexus' ); ?></strong>
+			<ol style="margin:8px 0 0;padding-left:20px">
+				<li><?php esc_html_e( 'User clicks "Sign in with [Provider]" on any OAuth connector card.', 'nexus' ); ?></li>
+				<li><?php esc_html_e( 'A popup opens to the provider\'s login page (e.g. notion.com/oauth/authorize) using Therum\'s registered OAuth app.', 'nexus' ); ?></li>
+				<li><?php esc_html_e( 'User authorizes the app on the provider\'s screen.', 'nexus' ); ?></li>
+				<li><?php esc_html_e( 'Provider redirects to Therum\'s proxy → proxy exchanges the code for tokens → proxy sends HMAC-signed tokens back to this site → connector flips to "connected."', 'nexus' ); ?></li>
+			</ol>
+			<p style="margin-top:12px;color:var(--tx3);font-size:12px">
+				<?php
+				printf(
+					/* translators: %s = current source */
+					esc_html__( 'Source: %s. Constants in wp-config.php always win over this UI.', 'nexus' ),
+					'<code>' . esc_html( $source ) . '</code>'
+				);
+				?>
+			</p>
+		</div>
+	</div>
+	<?php
+}
+
+add_action( 'wp_ajax_nexus_oauth_hub_save', function() {
+	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( [ 'message' => 'forbidden' ], 403 );
+	check_ajax_referer( 'nexus_connector', 'nonce' );
+
+	if ( defined( 'NEXUS_OAUTH_PROXY_URL' ) ) {
+		wp_send_json_error( [ 'message' => 'Locked by wp-config.php — remove the constants to manage from this UI.' ] );
+	}
+
+	$enabled = ! empty( $_POST['enabled'] ) && $_POST['enabled'] !== '0';
+	$url     = isset( $_POST['url'] )    ? esc_url_raw( wp_unslash( (string) $_POST['url'] ) )    : '';
+	$secret  = isset( $_POST['secret'] ) ? sanitize_text_field( wp_unslash( (string) $_POST['secret'] ) ) : '';
+
+	// Treat the masked placeholder as "no change" — pull existing.
+	$current = nexus_oauth_hub_settings();
+	if ( $secret === '••••••••••••••••' ) $secret = (string) $current['secret'];
+
+	// Auto-default the URL if user blanked it.
+	if ( ! $url ) $url = NEXUS_OAUTH_DEFAULT_PROXY_URL;
+
+	// Auto-generate a secret on first enable so the user never has to invent one.
+	if ( $enabled && ! $secret ) {
+		$secret = wp_generate_password( 48, true, false );
+	}
+
+	update_option( 'nexus_oauth_hub', [
+		'enabled' => $enabled ? '1' : '',
+		'url'     => $url,
+		'secret'  => $secret,
+	], false );
+
+	wp_send_json_success( [
+		'message' => $enabled
+			? 'Hosted OAuth enabled. Test by clicking Sign in on any OAuth connector.'
+			: 'Saved. Hosted OAuth is OFF — connectors will use the BYOA Client ID/Secret path.',
+		'active'  => nexus_oauth_hosted_mode(),
+	] );
+} );
+
+add_action( 'wp_ajax_nexus_oauth_hub_rotate', function() {
+	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( [ 'message' => 'forbidden' ], 403 );
+	check_ajax_referer( 'nexus_connector', 'nonce' );
+	if ( defined( 'NEXUS_OAUTH_PROXY_SHARED_SECRET' ) ) {
+		wp_send_json_error( [ 'message' => 'Locked by wp-config.php' ] );
+	}
+	$current = nexus_oauth_hub_settings();
+	$current['secret'] = wp_generate_password( 48, true, false );
+	update_option( 'nexus_oauth_hub', $current, false );
+	wp_send_json_success( [ 'message' => 'Shared secret rotated. Update the proxy\'s HMAC_SECRET to match.' ] );
+} );
+
+add_action( 'wp_ajax_nexus_oauth_hub_dismiss_nudge', function() {
+	if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( [ 'message' => 'forbidden' ], 403 );
+	check_ajax_referer( 'nexus_connector', 'nonce' );
+	update_user_meta( get_current_user_id(), 'nexus_oauth_hub_nudge_dismissed', time() );
+	wp_send_json_success();
+} );

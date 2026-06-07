@@ -1,5 +1,23 @@
 # Nexus by Therum — Changelog
 
+## [2.4.0] — 2026-06-07
+
+You no longer need to register a developer OAuth app at Google/Notion/Slack/Stripe/etc. to use "Sign in with X" — flip one toggle in the new OAuth Hub tab and every OAuth connector signs in with one click through Therum's hosted proxy.
+
+### Added — OAuth Hub settings tab (Manage → OAuth Hub)
+- **One toggle** flips hosted OAuth on across all 20 OAuth-capable connectors. No per-provider Client ID / Secret required.
+- **Proxy URL pre-filled** with `https://oauth.therum.studio` (Therum's hosted Cloudflare Worker endpoint). Override only if you self-host.
+- **Shared secret auto-generated** on first enable — no user-invented secret, no copy-paste from a password manager. Rotate button on the form.
+- **Source indicator** shows whether the active config comes from `wp-config.php` constants or this UI. Constants always win (deployment-locked).
+- **How-it-works panel** explaining the popup → provider → proxy → callback flow.
+
+### Added — one-time nudge banner
+- Top of the Nexus admin shows a soft callout — "Want Sign in with X to just work?" → links to the OAuth Hub. Hides for 30 days when dismissed; hides permanently once hosted mode is enabled or constants are detected.
+
+### Changed
+- `nexus_oauth_hosted_mode()` now reads from the new `nexus_oauth_hub` option as a fallback when wp-config.php constants aren't defined. Existing constants behavior is unchanged.
+- Connector card's OAuth section automatically hides the Client ID / Secret fields when hosted mode is active.
+
 ## [2.3.1] — 2026-06-07
 
 Hotfix — "Sign in with X" now opens the provider's sign-in page in a popup, the way Sign in with Google does it. Previously the button either redirected the whole admin page or silently expanded an inline credentials form.

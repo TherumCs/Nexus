@@ -181,6 +181,26 @@ final class Nexus_Connections_Page {
 				</div>
 			</div>
 
+			<?php // One-time nudge — if hosted OAuth isn't on, point users at
+			      // the OAuth Hub tab so they don't have to register a developer
+			      // app at every provider to get Sign in with X working.
+			      // Dismissible per-user; sticks for 30 days. ?>
+			<?php
+			$hub_nudge_dismissed = (int) get_user_meta( get_current_user_id(), 'nexus_oauth_hub_nudge_dismissed', true );
+			$show_nudge = ! nexus_oauth_hosted_mode() && $cur !== 'oauth_hub' && ( ! $hub_nudge_dismissed || ( time() - $hub_nudge_dismissed ) > 30 * DAY_IN_SECONDS );
+			if ( $show_nudge ):
+				$hub_url = add_query_arg( [ 'page' => 'nexus', 'tab' => 'oauth_hub' ], admin_url( 'admin.php' ) );
+			?>
+				<div class="nexus-oauth-hub-nudge" style="background:linear-gradient(135deg,color-mix(in srgb,var(--ac) 10%,transparent),color-mix(in srgb,var(--ac) 4%,transparent));border:1px solid color-mix(in srgb,var(--ac) 28%,transparent);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+					<div style="flex:1;font-size:13px;line-height:1.55">
+						<strong><?php esc_html_e( 'Want Sign in with X to just work?', 'nexus' ); ?></strong>
+						<?php esc_html_e( 'Turn on the Therum OAuth proxy and skip the Client ID / Secret setup for every provider.', 'nexus' ); ?>
+					</div>
+					<a href="<?php echo esc_url( $hub_url ); ?>" class="th-button th-button-primary" style="white-space:nowrap"><?php esc_html_e( 'Open OAuth Hub →', 'nexus' ); ?></a>
+					<button type="button" class="th-button" data-nexus-oauth-hub-dismiss style="padding:6px 10px"><?php esc_html_e( 'Dismiss', 'nexus' ); ?></button>
+				</div>
+			<?php endif; ?>
+
 			<div class="th-cx-grid">
 				<?php self::render_nav( $tabs, $cur ); ?>
 
@@ -468,6 +488,14 @@ add_action( 'init', function() {
 		'count'    => '488',
 		'desc'     => __( 'Tamper-evident connector + credential lifecycle log.', 'nexus' ),
 		'render'   => 'nexus_render_audit_tab',
+	] );
+
+	Nexus_Connections_Page::register( 'oauth_hub', [
+		'label'    => __( 'OAuth Hub', 'nexus' ),
+		'section'  => 'manage',
+		'priority' => 85,
+		'desc'     => __( 'One-click sign-in for every OAuth connector — no Client ID/Secret required. Routes through the Therum-hosted OAuth proxy.', 'nexus' ),
+		'render'   => 'nexus_render_oauth_hub_tab',
 	] );
 
 	Nexus_Connections_Page::register( 'updates', [
